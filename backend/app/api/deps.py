@@ -26,7 +26,7 @@ def get_current_user(
         # Ideally, user provides SUPABASE_JWT_SECRET in .env.
 
         # For this stage, let's assume we decode payload to get sub (uuid).
-        payload = jwt.decode(token, settings.SUPABASE_KEY, algorithms=["HS256"], options={"verify_signature": False})
+        payload = jwt.decode(token, settings.SUPABASE_KEY, algorithms=["HS256"])
         user_id = payload.get("sub")
         email = payload.get("email")
 
