@@ -5,7 +5,7 @@ Communication between Client and Server happens via WebSocket at `/ws/meetup`.
 Authentication is handled via the `token` query parameter during connection.
 
 ## Connection
-**URL**: `ws://api.meetup.com/ws/meetup?token=<JWT>&session_id=<UUID>`
+**URL**: `ws://api.meetup.com/api/v1/ws/meetup?token=<JWT>&session_id=<UUID>`
 
 ## Payloads
 
@@ -49,6 +49,19 @@ Broadcast to other participants when a user updates location.
     "lon": -122.4194,
     "accuracy_m": 5.0,
     "timestamp": "2023-10-27T10:00:00Z"
+  }
+}
+```
+
+#### `presence_update`
+Broadcast when a user joins (connects) or leaves (disconnects) the session.
+```json
+{
+  "type": "presence_update",
+  "payload": {
+    "user_id": "uuid-of-user",
+    "status": "online", 
+    "last_seen": "2023-10-27T10:15:00Z"
   }
 }
 ```

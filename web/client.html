@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MeetUp Realtime Debugger</title>
+    
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 20px; background: #f5f5f5; }
+        .container { max-width: 1000px; margin: 0 auto; display: grid; grid-template-columns: 300px 1fr; gap: 20px; }
+        .panel { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        h2 { margin-top: 0; font-size: 1.2rem; }
+        
+        .form-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; font-weight: 600; font-size: 0.9rem; }
+        input, button { width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; }
+        input { font-family: monospace; }
+        button { background: #007AFF; color: white; border: none; cursor: pointer; font-weight: 600; margin-top: 10px; }
+        button:hover { background: #0056b3; }
+        button.disconnect { background: #ff3b30; }
+        
+        #map { height: 500px; border-radius: 8px; border: 1px solid #ddd; }
+        
+        #logs { max-height: 200px; overflow-y: auto; background: #1e1e1e; color: #00ff00; padding: 10px; font-family: monospace; font-size: 0.8rem; border-radius: 4px; margin-top: 10px; }
+        .log-entry { margin-bottom: 4px; border-bottom: 1px solid #333; padding-bottom: 2px; }
+        .log-time { color: #888; margin-right: 8px; }
+        .log-event { color: #5ac8fa; font-weight: bold; }
+        
+        .status-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #ccc; margin-right: 8px; }
+        .status-online { background: #34c759; }
+        .status-error { background: #ff3b30; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="panel">
+        <h2>📡 Connection</h2>
+        
+        <div class="form-group">
+            <label>WS URL</label>
+            <input type="text" id="wsUrl" value="ws://localhost:8000/api/v1/ws/meetup">
+        </div>
+        
+        <div class="form-group">
+            <label>Session ID (UUID)</label>
+            <input type="text" id="sessionId" placeholder="Paste Session UUID">
+        </div>
+        
+        <div class="form-group">
+            <label>User Token (JWT)</label>
+            <input type="text" id="token" placeholder="Paste JWT">
+        </div>
+        
+        <button id="connectBtn" onclick="toggleConnection()">Connect</button>
+        
+        <div style="margin-top: 20px;">
+            <div class="status-dot" id="statusDot"></div>
+            <span id="statusText">Disconnected</span>
+        </div>
+        
+        <div style="margin-top: 20px; border-top: 1px solid #eee; padding-top: 10px;">
+            <label>Current Location</label>
+            <div id="myLoc">Not broadcasting</div>
+        </div>
+    </div>
+    
+    <div class="panel">
+        <h2>🗺️ Live Map</h2>
+        <div id="map"></div>
+        <div id="logs"></div>
+    </div>
+</div>
+
+<!-- Leaflet JS -->
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<script>
+    let ws = null;
+    let map = null;
+    let myMarker = null;
+    let peerMarkers = {}; // user_id -> marker
+    let intervalId = null;
+
+    // Initialize Map
+    function initMap() {
+        // Default to San Francisco
+        map = L.map('map').setView([12.9716, 77.5946], 13); // Bangalore default
+        
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+            attribution: '©OpenStreetMap, ©CartoDB'
+        }).addTo(map);
+    }
+
+    function log(type, msg) {
+        const div = document.createElement('div');
+        div.className = 'log-entry';
+        const time = new Date().toLocaleTimeString();
+        div.innerHTML = `<span class="log-time">[${time}]</span> <span class="log-event">${type}</span> ${msg}`;
+        const logs = document.getElementById('logs');
+        logs.prepend(div);
+        if (logs.children.length > 50) logs.lastChild.remove();
+    }
+
+    function toggleConnection() {
+        if (ws) {
+            ws.close();
+            ws = null;
+            clearInterval(intervalId);
+            updateStatus(false);
+            document.getElementById('connectBtn').innerText = 'Connect';
+            document.getElementById('connectBtn').className = '';
+            log('INFO', 'Disconnected manually');
+            return;
+        }
+
+        const url = document.getElementById('wsUrl').value;
+        const session = document.getElementById('sessionId').value;
+        const token = document.getElementById('token').value;
+
+        if (!session || !token) {
+            alert("Please enter Session ID and Token!");
+            return;
+        }
+
+        const fullUrl = `${url}?session_id=${session}&token=${token}`;
+        log('CONNECTING', `Connecting to...`);
+        
+        ws = new WebSocket(fullUrl);
+
+        ws.onopen = () => {
+            log('SUCCESS', 'WebSocket Connected!');
+            updateStatus(true);
+            document.getElementById('connectBtn').innerText = 'Disconnect';
+            document.getElementById('connectBtn').className = 'disconnect';
+            
+            // Start sending location
+            startBroadcasting();
+        };
+
+        ws.onmessage = (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                handleMessage(data);
+            } catch (e) {
+                log('ERROR', 'Parse error: ' + event.data);
+            }
+        };
+
+        ws.onclose = (e) => {
+            log('WARN', `Disconnected (Code: ${e.code})`);
+            ws = null;
+            clearInterval(intervalId);
+            updateStatus(false);
+            document.getElementById('connectBtn').innerText = 'Connect';
+            document.getElementById('connectBtn').className = '';
+        };
+        
+        ws.onerror = (e) => {
+            log('ERROR', 'WebSocket Error');
+        };
+    }
+
+    function handleMessage(data) {
+        if (data.type === 'peer_location') {
+            const p = data.payload;
+            updatePeerMarker(p.user_id, p.lat, p.lon);
+            log('RX', `User ${p.user_id.substring(0,4)} moved to [${p.lat.toFixed(4)}, ${p.lon.toFixed(4)}]`);
+        } else if (data.type === 'presence_update') {
+            const p = data.payload;
+            log('PRESENCE', `User ${p.user_id.substring(0,4)} is now ${p.status.toUpperCase()}`);
+            if (p.status === 'offline' && peerMarkers[p.user_id]) {
+                // Determine visuals for offline? Maybe grey out. For now just log.
+            }
+        } else {
+            log('MSG', JSON.stringify(data));
+        }
+    }
+
+    function updatePeerMarker(userId, lat, lon) {
+        if (!peerMarkers[userId]) {
+            // New Peer
+            const color = '#' + Math.floor(Math.random()*16777215).toString(16);
+            const icon = L.divIcon({
+                className: 'custom-div-icon',
+                html: `<div style='background-color:${color}; width: 12px; height: 12px; border-radius: 50%; border: 2px solid white; box-shadow: 0 0 4px black;'></div>`,
+                iconSize: [20, 20],
+                iconAnchor: [10, 10]
+            });
+            peerMarkers[userId] = L.marker([lat, lon], {icon: icon}).addTo(map);
+            peerMarkers[userId].bindPopup(`Peer: ${userId.substring(0,4)}`);
+        } else {
+            // Move existing
+            peerMarkers[userId].setLatLng([lat, lon]);
+        }
+    }
+
+    function startBroadcasting() {
+        // Simulate movement around Bangalore
+        let lat = 12.9716;
+        let lon = 77.5946;
+        
+        // Randomize start slightly so two tabs don't overlap exactly
+        lat += (Math.random() - 0.5) * 0.01;
+        lon += (Math.random() - 0.5) * 0.01;
+
+        // Set my marker
+        if (!myMarker) {
+             const icon = L.divIcon({
+                className: 'custom-div-icon',
+                html: `<div style='background-color:#007AFF; width: 15px; height: 15px; border-radius: 50%; border: 2px solid white; box-shadow: 0 0 5px rgba(0,122,255,0.5);'></div>`,
+                iconSize: [20, 20],
+                iconAnchor: [10, 10]
+            });
+            myMarker = L.marker([lat, lon], {icon: icon}).addTo(map);
+            myMarker.bindPopup("Me");
+            map.setView([lat, lon], 14);
+        }
+
+        intervalId = setInterval(() => {
+            if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+            // Random walk
+            lat += (Math.random() - 0.5) * 0.001;
+            lon += (Math.random() - 0.5) * 0.001;
+            
+            myMarker.setLatLng([lat, lon]);
+            document.getElementById('myLoc').innerText = `${lat.toFixed(5)}, ${lon.toFixed(5)}`;
+
+            const msg = {
+                type: "location_update",
+                payload: {
+                    lat: lat,
+                    lon: lon,
+                    accuracy_m: 10.0,
+                    timestamp: new Date().toISOString()
+                }
+            };
+            
+            ws.send(JSON.stringify(msg));
+            // log('TX', `Sent location`);
+        }, 2000); // 2 seconds
+    }
+
+    function updateStatus(isOnline) {
+        const dot = document.getElementById('statusDot');
+        const text = document.getElementById('statusText');
+        if (isOnline) {
+            dot.className = 'status-dot status-online';
+            text.innerText = 'Connected';
+            text.style.color = '#34c759';
+        } else {
+            dot.className = 'status-dot status-error';
+            text.innerText = 'Disconnected';
+            text.style.color = '#ff3b30';
+        }
+    }
+
+    initMap();
+</script>
+
+</body>
+</html>
