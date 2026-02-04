@@ -1,41 +1,47 @@
-# Partner Handoff (Mobile/Frontend) - Week 1
+# Partner Handoff (Mobile/Frontend) - Week 2 (Realtime) 🚀
 
-The Backend v1 is ready. Here is what you need to connect your mobile app.
+The Backend Realtime Gateway is **ready**.
 
-## 1. Connection Details
+## 1. Quick Start (Test Data) ⚡️
 
-- **Base URL**: `http://localhost:8000` (Android Emulator: `http://10.0.2.2:8000`)
-- **Auth Provider**: Supabase
-    - **Note**: The backend verifies Supabase JWTs. You must configure your mobile app with the same Supabase Project URL/Key as the backend (or just use the tokens if testing against a real Supabase instance).
+We created a seed script to give you 2 Users + 1 Active Session instantly.
+run:
+```bash
+docker-compose exec backend python seed.py
+```
+This prints:
+- `SESSION_ID` (UUID)
+- `TOKEN_ALICE` (JWT)
+- `TOKEN_BOB` (JWT)
 
-## 2. API Endpoints (REST)
+## 2. Realtime Gateway
 
-All endpoints require the `Authorization: Bearer <SUPABASE_JWT>` header.
+*   **URL**: `ws://localhost:8000/api/v1/ws/meetup` (Note the `/api/v1` prefix!)
+*   **Query Params**:
+    *   `token`: Your Supabase JWT.
+    *   `session_id`: The UUID of the session.
 
-### User
-- `GET /api/v1/users/me`: Get current user profile.
+Example URL:
+`ws://localhost:8000/api/v1/ws/meetup?token=...&session_id=...`
 
-### Meet Requests
-- `GET /api/v1/requests/pending`: List incoming requests.
-- `POST /api/v1/requests/?receiver_id=<UUID>`: Send a meet request.
-    - **Note**: Since we don't have a "User Search" API yet, you can create a second user via Supabase and grab their UUID manually for testing, or use "Static Data" as per the plan.
-- `POST /api/v1/requests/{request_id}/accept`: Accept a request.
+## 3. Protocol
+See `PROTOCOL.md` for the full JSON schema.
 
-### Sessions
-- `POST /api/v1/sessions/from-request/{request_id}`: Turn an accepted request into an active session.
-- `GET /api/v1/sessions/active`: Check if the user is in an active session.
+**Key Events**:
+1.  **Presence**: You will receive `presence_update` (status: online) immediately when the other user connects.
+2.  **Location**: Send `location_update` every ~2s. You will receive `peer_location` when the other user moves.
 
-## 3. Recommended Dev Workflow
+## 4. Tools for You 🛠️
 
-1.  **Start Backend**: `docker-compose up`
-2.  **Auth**: Login on mobile via Supabase.
-3.  **Test Flow**:
-    -   Hardcode a `receiver_id` (a second user's UUID) in your "Request Location" button for now.
-    -   Call `POST /requests`.
-    -   Login as that second user (or use a simulator instance).
-    -   See request in `GET /requests/pending`.
-    -   Accept it.
-    -   Transition UI to "Active Session" placeholder.
+### A. Simple HTML Client (`web/client.html`)
+We built a simple web debugger for you.
+1.  Open `web/client.html` in Chrome.
+2.  Paste the Session ID and Token from the seed script.
+3.  Click Connect.
+4.  **Use this to verify your mobile app works**: If your app sends location, this web page should see it move!
 
-## 4. Pending items for Week 2
-- Realtime location streaming (WebSockets) is coming next week. For now, just show a "Session Active" static screen.
+### B. Seed Script (`backend/seed.py`)
+Use this whenever you reset the database or need fresh test users.
+
+## 5. Web Fallback
+The `web/client.html` file IS a working implementation of the map view. You can use it as a reference for the React Native implementation (it uses Leaflet JS, but the logic is the same).
