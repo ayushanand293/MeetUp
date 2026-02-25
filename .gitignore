@@ -9,6 +9,15 @@ __pycache__/
 *$py.class
 *.so
 .Python
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+.hypothesis/
+.pytype/
 env/
 build/
 develop-eggs/
@@ -39,6 +48,9 @@ docker-compose.override.yml
 .vscode/
 *.swp
 *.swo
+
+# Logs
+*.log
 
 # Node (Mobile/Web placeholder)
 node_modules/
