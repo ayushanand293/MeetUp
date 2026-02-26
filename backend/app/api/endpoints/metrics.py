@@ -10,7 +10,7 @@ router = APIRouter()
 @router.get("/metrics", tags=["monitoring"])
 async def get_metrics_endpoint():
     """Get realtime metrics for the gateway.
-    
+
     Returns metrics including:
     - Active WebSocket connections
     - Messages received/broadcasted

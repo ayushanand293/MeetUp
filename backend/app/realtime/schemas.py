@@ -1,11 +1,11 @@
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from uuid import UUID
 
 from pydantic import BaseModel, Field
 
 
-class EventType(str, Enum):
+class EventType(StrEnum):
     # Client -> Server
     LOCATION_UPDATE = "location_update"
     END_SESSION = "end_session"
@@ -17,7 +17,7 @@ class EventType(str, Enum):
     ERROR = "error"
 
 
-class PresenceStatus(str, Enum):
+class PresenceStatus(StrEnum):
     ONLINE = "online"
     OFFLINE = "offline"
 

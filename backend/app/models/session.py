@@ -9,13 +9,13 @@ from sqlalchemy.sql import func
 from app.core.database import Base
 
 
-class SessionStatus(str, enum.Enum):
+class SessionStatus(enum.StrEnum):
     PENDING = "PENDING"
     ACTIVE = "ACTIVE"
     ENDED = "ENDED"
 
 
-class ParticipantStatus(str, enum.Enum):
+class ParticipantStatus(enum.StrEnum):
     JOINED = "JOINED"
     LEFT = "LEFT"
 

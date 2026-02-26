@@ -1,8 +1,7 @@
 """Location data validation module."""
 
-from datetime import datetime, timedelta
-from typing import Tuple, Optional
 import math
+from datetime import datetime
 
 
 class LocationValidator:
@@ -24,7 +23,7 @@ class LocationValidator:
     TIMESTAMP_BUFFER_SECONDS = 300
 
     @staticmethod
-    def validate_coordinates(lat: float, lon: float) -> Tuple[bool, Optional[str]]:
+    def validate_coordinates(lat: float, lon: float) -> tuple[bool, str | None]:
         """Validate latitude and longitude values."""
         if not isinstance(lat, (int, float)) or not isinstance(lon, (int, float)):
             return False, "Latitude and longitude must be numbers"
@@ -38,7 +37,7 @@ class LocationValidator:
         return True, None
 
     @staticmethod
-    def validate_accuracy(accuracy_m: float) -> Tuple[bool, Optional[str]]:
+    def validate_accuracy(accuracy_m: float) -> tuple[bool, str | None]:
         """Validate accuracy value."""
         if not isinstance(accuracy_m, (int, float)):
             return False, "Accuracy must be a number"
@@ -52,7 +51,7 @@ class LocationValidator:
         return True, None
 
     @staticmethod
-    def validate_timestamp(timestamp: datetime) -> Tuple[bool, Optional[str]]:
+    def validate_timestamp(timestamp: datetime) -> tuple[bool, str | None]:
         """Validate timestamp is recent (within buffer window)."""
         now = datetime.utcnow()
         age = now - timestamp
@@ -61,7 +60,10 @@ class LocationValidator:
             return False, f"Timestamp is in the future (age: {age.total_seconds()}s)"
 
         if age.total_seconds() > LocationValidator.TIMESTAMP_BUFFER_SECONDS:
-            return False, f"Timestamp is stale (age: {age.total_seconds()}s, max {LocationValidator.TIMESTAMP_BUFFER_SECONDS}s)"
+            return (
+                False,
+                f"Timestamp is stale (age: {age.total_seconds()}s, max {LocationValidator.TIMESTAMP_BUFFER_SECONDS}s)",
+            )
 
         return True, None
 
@@ -86,7 +88,7 @@ class LocationValidator:
         new_lat: float,
         new_lon: float,
         new_timestamp: datetime,
-    ) -> Tuple[bool, Optional[str]]:
+    ) -> tuple[bool, str | None]:
         """Detect if location jumped impossibly far in time."""
         distance_km = LocationValidator.haversine_distance(prev_lat, prev_lon, new_lat, new_lon)
         time_delta = (new_timestamp - prev_timestamp).total_seconds()
@@ -109,8 +111,8 @@ def validate_location_update(
     lon: float,
     accuracy_m: float,
     timestamp: datetime,
-    prev_location: Optional[dict] = None,
-) -> Tuple[bool, Optional[str]]:
+    prev_location: dict | None = None,
+) -> tuple[bool, str | None]:
     """
     Comprehensive location validation.
 

@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.endpoints import realtime, requests, sessions, users, metrics
+from app.api.endpoints import metrics, realtime, requests, sessions, users
 
 api_router = APIRouter()
 api_router.include_router(users.router, prefix="/users", tags=["users"])

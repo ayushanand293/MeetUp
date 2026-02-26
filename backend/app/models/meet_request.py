@@ -9,7 +9,7 @@ from sqlalchemy.sql import func
 from app.core.database import Base
 
 
-class RequestStatus(str, enum.Enum):
+class RequestStatus(enum.StrEnum):
     PENDING = "PENDING"
     ACCEPTED = "ACCEPTED"
     REJECTED = "REJECTED"
