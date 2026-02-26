@@ -27,13 +27,14 @@ const AcceptRequestScreen = ({ navigation }) => {
             ]);
         } catch (error) {
             console.error('Accept Error:', error);
-            // Fallback for Demo/Testing: Simulate success if backend fails
+            // Demo Mode: If backend fails, still navigate to active session
+            // (the ActiveSessionScreen will handle missing backend gracefully)
             Alert.alert(
                 'Demo Mode',
-                'Backend unreachable or rejected acceptance. Simulating active session for testing.',
+                'Backend unreachable. Starting session in demo mode for testing.',
                 [
                     {
-                        text: 'OK',
+                        text: 'Continue',
                         onPress: () => navigation.navigate('ActiveSession', {
                             friend: request.from_user
                         })
