@@ -1,10 +1,6 @@
 module.exports = {
   root: true,
-  extends: [
-    'eslint:recommended',
-    'plugin:react/recommended',
-    'plugin:react-hooks/recommended',
-  ],
+  extends: ['eslint:recommended', 'plugin:react/recommended', 'plugin:react-hooks/recommended'],
   parser: '@babel/eslint-parser',
   parserOptions: {
     ecmaFeatures: {
@@ -26,7 +22,7 @@ module.exports = {
   rules: {
     'react/prop-types': 'off',
     'react/display-name': 'off',
-    'no-unused-vars': ['warn', { argsIgnorePattern: '^_' }],
+    'no-unused-vars': ['warn', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
     'react-native/no-inline-styles': 'warn',
     'react-native/no-unused-styles': 'warn',
     'react-hooks/rules-of-hooks': 'error',

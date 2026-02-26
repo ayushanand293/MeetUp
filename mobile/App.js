@@ -7,7 +7,10 @@ import * as Linking from 'expo-linking';
 
 export default function App() {
   const redirectUrl = Linking.createURL('/');
-  console.log('App starting... Supabase URL:', process.env.EXPO_PUBLIC_SUPABASE_URL ? 'Found' : 'Missing');
+  console.log(
+    'App starting... Supabase URL:',
+    process.env.EXPO_PUBLIC_SUPABASE_URL ? 'Found' : 'Missing'
+  );
   console.log('--- ACTION REQUIRED ---');
   console.log('Add this URL to your Supabase Redirect URLs:', redirectUrl);
   console.log('-----------------------');
