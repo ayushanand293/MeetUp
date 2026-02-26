@@ -153,9 +153,12 @@ class ConnectionManager:
         if session_id not in self.active_connections:
             return
 
+        # Make a copy to avoid "Set changed size during iteration" error
+        connections_copy = list(self.active_connections[session_id])
+        
         # Send to all local WebSockets
         dead_connections = []
-        for websocket in self.active_connections[session_id]:
+        for websocket in connections_copy:
             try:
                 await websocket.send_text(message)
             except Exception as e:
