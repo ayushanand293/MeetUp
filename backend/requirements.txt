@@ -7,6 +7,8 @@ asyncpg
 redis
 pydantic-settings
 pyjwt
+cryptography
+requests
 python-multipart
 httpx
 pytest
