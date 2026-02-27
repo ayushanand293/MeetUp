@@ -12,7 +12,7 @@ from app.core.database import Base
 REQUEST_TTL_MINUTES = 10
 
 
-class RequestStatus(str, enum.Enum):
+class RequestStatus(enum.StrEnum):
     PENDING = "PENDING"
     ACCEPTED = "ACCEPTED"
     REJECTED = "REJECTED"

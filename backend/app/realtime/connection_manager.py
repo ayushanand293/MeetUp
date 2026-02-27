@@ -1,8 +1,8 @@
 """WebSocket connection manager with Redis pub/sub for multi-instance support."""
 
+import asyncio
 import json
 import logging
-import asyncio
 from collections import defaultdict
 from datetime import datetime
 from uuid import UUID
@@ -10,8 +10,9 @@ from uuid import UUID
 import redis.asyncio as redis
 from fastapi import WebSocket
 
+from app.core.metrics import track_message_broadcasted, track_ws_connection_close, track_ws_connection_open
 from app.core.redis import get_redis
-from app.core.metrics import track_ws_connection_open, track_ws_connection_close, track_message_broadcasted
+
 from .schemas import PresenceEvent, PresencePayload, PresenceStatus
 
 logger = logging.getLogger(__name__)
@@ -19,11 +20,11 @@ logger = logging.getLogger(__name__)
 
 class ConnectionManager:
     """Manages WebSocket connections with Redis pub/sub for multi-instance support.
-    
+
     Architecture:
     - Local: ws_to_user dict + active_connections (per-instance)
     - Distributed: Redis pub/sub channel per session (cross-instance)
-    
+
     Flow:
     1. Client connects → register in active_connections + subscribe to Redis channel
     2. Client sends message → broadcast to Redis channel
@@ -35,21 +36,21 @@ class ConnectionManager:
         # Local per-instance state
         self.active_connections: dict[UUID, set[WebSocket]] = defaultdict(set)
         self.ws_to_user: dict[WebSocket, UUID] = {}
-        
+
         # Redis pub/sub subscriptions (one per session)
         self.pubsub_subscriptions: dict[UUID, redis.client.PubSub] = {}
-        
+
         # Background listener tasks
         self._listener_tasks: dict[UUID, asyncio.Task] = {}
 
     async def connect(self, session_id: UUID, user_id: UUID, websocket: WebSocket):
         """Accept WebSocket connection and subscribe to session channel."""
         await websocket.accept()
-        
+
         # Register local connection
         self.active_connections[session_id].add(websocket)
         self.ws_to_user[websocket] = user_id
-        
+
         logger.info(f"User {user_id} connected to session {session_id}")
         track_ws_connection_open(str(session_id))
 
@@ -84,7 +85,7 @@ class ConnectionManager:
 
     async def broadcast(self, session_id: UUID, message: dict | str, exclude_user: UUID = None) -> None:
         """Broadcast message to all users in session via Redis pub/sub.
-        
+
         Multi-instance safe: publishes to Redis channel, which all instances receive.
         """
         if isinstance(message, dict):
@@ -105,13 +106,13 @@ class ConnectionManager:
         """Subscribe this instance to session's Redis channel."""
         redis_client = await get_redis()
         pubsub = redis_client.pubsub()
-        
+
         channel = f"session:{session_id}"
         await pubsub.subscribe(channel)
         self.pubsub_subscriptions[session_id] = pubsub
-        
+
         logger.info(f"Subscribed to Redis channel: {channel}")
-        
+
         # Start listening for messages from Redis in background
         task = asyncio.create_task(self._listen_redis_messages(session_id, pubsub))
         self._listener_tasks[session_id] = task
@@ -124,9 +125,9 @@ class ConnectionManager:
             await pubsub.unsubscribe(channel)
             await pubsub.close()
             del self.pubsub_subscriptions[session_id]
-            
+
             logger.info(f"Unsubscribed from Redis channel: {channel}")
-        
+
         # Cancel listener task if running
         if session_id in self._listener_tasks:
             task = self._listener_tasks[session_id]
@@ -140,7 +141,7 @@ class ConnectionManager:
                 if message["type"] == "message":
                     # Received a message from another instance or this instance
                     data = message["data"]
-                    
+
                     # Forward to all local connections in this session
                     await self._forward_to_local_connections(session_id, data)
         except asyncio.CancelledError:
@@ -155,7 +156,7 @@ class ConnectionManager:
 
         # Make a copy to avoid "Set changed size during iteration" error
         connections_copy = list(self.active_connections[session_id])
-        
+
         # Send to all local WebSockets
         dead_connections = []
         for websocket in connections_copy:

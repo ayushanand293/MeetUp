@@ -1,16 +1,15 @@
 """In-memory metrics collection for the realtime gateway."""
 
-from typing import Dict
-from threading import Lock
 from datetime import datetime
+from threading import Lock
 
 
 class Metrics:
     """Thread-safe in-memory metrics collector."""
 
     def __init__(self):
-        self._counters: Dict[str, int] = {}
-        self._gauges: Dict[str, int] = {}
+        self._counters: dict[str, int] = {}
+        self._gauges: dict[str, int] = {}
         self._lock = Lock()
 
     def increment_counter(self, name: str, value: int = 1) -> None:
@@ -48,7 +47,7 @@ class Metrics:
         with self._lock:
             return self._gauges.get(name, 0)
 
-    def get_all(self) -> Dict[str, dict]:
+    def get_all(self) -> dict[str, dict]:
         """Get all metrics as a dictionary."""
         with self._lock:
             return {

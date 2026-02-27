@@ -51,9 +51,58 @@ We included a simple HTML client to verify the WebSocket connection.
 - **API**: FastAPI (Auth, User Management, Session Logic)
 - **Realtime**: WebSocket Gateway (`/api/v1/ws/meetup`)
 - **DB**: PostgreSQL + PostGIS (Geospatial data)
-- **Cache**: Redis (Session state, Presence)
+- **Cache**: Redis (Pub/sub, Presence, Rate limiting)
+
+See [ARCHITECTURE.md](./ARCHITECTURE.md) for detailed multi-instance architecture.
+
+---
 
 ## 🧪 Testing
 ```bash
 docker-compose exec backend pytest
+```
+
+---
+
+## 🧹 Code Quality & Linting
+
+### Linting
+Run linters for both backend and mobile:
+```bash
+./scripts/lint.sh
+```
+
+**Backend only** (Python/Ruff):
+```bash
+docker-compose exec backend ruff check .
+docker-compose exec backend ruff format .
+```
+
+**Mobile only** (JavaScript/ESLint):
+```bash
+cd mobile
+npm run lint        # Check
+npm run lint:fix    # Auto-fix
+npm run format      # Prettier format
+```
+
+### Pre-commit Hooks (Recommended)
+Auto-run linters before each commit:
+```bash
+./scripts/setup_hooks.sh
+```
+
+This installs git hooks that automatically:
+- ✅ Lint Python (Ruff) and JavaScript (ESLint)
+- ✅ Format code (Ruff format + Prettier)
+- ✅ Check for trailing whitespace, large files, etc.
+
+**Manual pre-commit run**:
+```bash
+pre-commit run --all-files
+```
+
+**Skip hooks** (not recommended):
+```bash
+git commit --no-verify
 ```

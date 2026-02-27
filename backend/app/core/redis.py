@@ -1,11 +1,10 @@
 """Redis connection pool and utilities."""
 
 import redis.asyncio as redis
-from typing import Optional
 
 from app.core.config import settings
 
-_redis_client: Optional[redis.Redis] = None
+_redis_client: redis.Redis | None = None
 
 
 async def get_redis() -> redis.Redis:
@@ -40,7 +39,7 @@ class RedisClient:
         key = f"presence:{session_id}:{user_id}"
         await self.client.delete(key)
 
-    async def get_presence(self, session_id: str, user_id: str) -> Optional[str]:
+    async def get_presence(self, session_id: str, user_id: str) -> str | None:
         """Get presence status for user in session."""
         key = f"presence:{session_id}:{user_id}"
         return await self.client.get(key)
