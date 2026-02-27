@@ -12,8 +12,9 @@ import {
     ScrollView,
 } from 'react-native';
 import { useAuth } from '../context/AuthContext';
+import client from '../api/client';
 
-const LoginScreen = ({ navigation }) => {
+const LoginScreen = ({ navigation, route }) => {
     const [activeTab, setActiveTab] = useState('email'); // 'email' or 'phone'
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
@@ -35,7 +36,16 @@ const LoginScreen = ({ navigation }) => {
         }
 
         try {
-            await signInWithEmail(email.trim(), password);
+            const data = await signInWithEmail(email.trim(), password);
+            // Upsert user profile into Postgres (required for name search to work)
+            // The display_name will be empty until the user sets it via profile
+            try {
+                const name = route?.params?.pendingName || data?.user?.user_metadata?.display_name || email.split('@')[0];
+                await client.post('/users/profile', { display_name: name });
+            } catch (profileErr) {
+                // Non-fatal: user is still logged in
+                console.warn('Profile upsert failed:', profileErr.message);
+            }
             // Session state will automatically trigger navigation to MainStack
         } catch (error) {
             let message = error.message;

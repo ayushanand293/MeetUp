@@ -55,6 +55,11 @@ class LocationValidator:
     def validate_timestamp(timestamp: datetime) -> Tuple[bool, Optional[str]]:
         """Validate timestamp is recent (within buffer window)."""
         now = datetime.utcnow()
+        # Ensure both datetimes are naive UTC for comparison
+        if timestamp.tzinfo is not None:
+            import calendar
+            # Convert aware timestamp to naive UTC
+            timestamp = timestamp.replace(tzinfo=None)
         age = now - timestamp
 
         if age.total_seconds() < -LocationValidator.TIMESTAMP_BUFFER_SECONDS:

@@ -12,35 +12,41 @@ import {
     ScrollView,
 } from 'react-native';
 import { useAuth } from '../context/AuthContext';
+import client from '../api/client';
 
 const RegisterScreen = ({ navigation }) => {
+    const [displayName, setDisplayName] = useState('');
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [confirmPassword, setConfirmPassword] = useState('');
     const { signUpWithEmail, loading } = useAuth();
 
     const handleRegister = async () => {
-        if (!email.trim() || !password || !confirmPassword) {
+        if (!displayName.trim() || !email.trim() || !password || !confirmPassword) {
             Alert.alert('Error', 'Please fill in all fields');
             return;
         }
-
         if (password !== confirmPassword) {
             Alert.alert('Error', 'Passwords do not match');
             return;
         }
-
         if (password.length < 6) {
             Alert.alert('Error', 'Password must be at least 6 characters');
+            return;
+        }
+        if (displayName.trim().length < 2) {
+            Alert.alert('Error', 'Display name must be at least 2 characters');
             return;
         }
 
         try {
             await signUpWithEmail(email.trim(), password);
+            // Profile will be saved after email confirmation when user first logs in
+            // Store name locally so LoginScreen can save it after auth
             Alert.alert(
-                'Success',
-                'Account created! Please check your email for a confirmation link.',
-                [{ text: 'OK', onPress: () => navigation.navigate('Login') }]
+                'Account Created!',
+                'Please check your email for a confirmation link, then sign in.',
+                [{ text: 'OK', onPress: () => navigation.navigate('Login', { pendingName: displayName.trim() }) }]
             );
         } catch (error) {
             Alert.alert('Registration Error', error.message);
@@ -59,6 +65,17 @@ const RegisterScreen = ({ navigation }) => {
                 </View>
 
                 <View style={styles.form}>
+                    <View style={styles.inputContainer}>
+                        <Text style={styles.label}>Your Name</Text>
+                        <TextInput
+                            style={styles.input}
+                            placeholder="How should friends find you?"
+                            value={displayName}
+                            onChangeText={setDisplayName}
+                            autoCapitalize="words"
+                        />
+                    </View>
+
                     <View style={styles.inputContainer}>
                         <Text style={styles.label}>Email Address</Text>
                         <TextInput
@@ -118,42 +135,14 @@ const RegisterScreen = ({ navigation }) => {
 };
 
 const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: '#fff',
-    },
-    scrollContent: {
-        flexGrow: 1,
-        padding: 24,
-        justifyContent: 'center',
-    },
-    header: {
-        marginBottom: 40,
-        alignItems: 'center',
-    },
-    title: {
-        fontSize: 32,
-        fontWeight: 'bold',
-        color: '#1a1a1a',
-        marginBottom: 8,
-    },
-    subtitle: {
-        fontSize: 16,
-        color: '#666',
-    },
-    form: {
-        width: '100%',
-    },
-    inputContainer: {
-        marginBottom: 20,
-    },
-    label: {
-        fontSize: 14,
-        fontWeight: '600',
-        color: '#333',
-        marginBottom: 8,
-        marginLeft: 4,
-    },
+    container: { flex: 1, backgroundColor: '#fff' },
+    scrollContent: { flexGrow: 1, padding: 24, justifyContent: 'center' },
+    header: { marginBottom: 40, alignItems: 'center' },
+    title: { fontSize: 32, fontWeight: 'bold', color: '#1a1a1a', marginBottom: 8 },
+    subtitle: { fontSize: 16, color: '#666' },
+    form: { width: '100%' },
+    inputContainer: { marginBottom: 20 },
+    label: { fontSize: 14, fontWeight: '600', color: '#333', marginBottom: 8, marginLeft: 4 },
     input: {
         width: '100%',
         height: 56,
@@ -179,25 +168,10 @@ const styles = StyleSheet.create({
         shadowRadius: 8,
         elevation: 4,
     },
-    buttonText: {
-        fontSize: 18,
-        fontWeight: 'bold',
-        color: '#fff',
-    },
-    footer: {
-        flexDirection: 'row',
-        justifyContent: 'center',
-        marginTop: 32,
-    },
-    footerText: {
-        fontSize: 14,
-        color: '#666',
-    },
-    link: {
-        fontSize: 14,
-        fontWeight: 'bold',
-        color: '#007AFF',
-    },
+    buttonText: { fontSize: 18, fontWeight: 'bold', color: '#fff' },
+    footer: { flexDirection: 'row', justifyContent: 'center', marginTop: 32 },
+    footerText: { fontSize: 14, color: '#666' },
+    link: { fontSize: 14, fontWeight: 'bold', color: '#007AFF' },
 });
 
 export default RegisterScreen;

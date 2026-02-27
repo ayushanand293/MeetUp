@@ -30,7 +30,7 @@ class EventEmitter {
       this.listeners.set(event, new Set());
     }
     this.listeners.get(event).add(callback);
-    
+
     // Return unsubscribe function
     return () => {
       this.listeners.get(event).delete(callback);
@@ -39,7 +39,7 @@ class EventEmitter {
 
   emit(event, data) {
     if (!this.listeners.has(event)) return;
-    
+
     for (const callback of this.listeners.get(event)) {
       try {
         callback(data);
@@ -65,30 +65,41 @@ class EventEmitter {
 class LocationService extends EventEmitter {
   constructor() {
     super();
-    
+
     // Current location state
     this.currentLocation = null;
     this.isTracking = false;
     this.hasPermission = false;
-    
+
     // Watchers and timers for cleanup
     this.locationWatcher = null;
     this.cacheUpdateTimer = null;
-    
+
     // Configuration
+    const mockLat = parseFloat(process.env.EXPO_PUBLIC_MOCK_LAT);
+    const mockLon = parseFloat(process.env.EXPO_PUBLIC_MOCK_LON);
+    const hasMock = !isNaN(mockLat) && !isNaN(mockLon);
+
+    // Each device gets a unique random offset at startup so two phones on the
+    // same Expo server don't report the exact same mock coordinates.
+    const jitterLat = hasMock ? (Math.random() - 0.5) * 0.006 : 0; // ±~330m
+    const jitterLon = hasMock ? (Math.random() - 0.5) * 0.006 : 0;
+
     this.config = {
       accuracy: Location.Accuracy.Balanced,
-      timeInterval: 2000, // 2 seconds
-      distanceInterval: 5, // 5 meters
-      enableBackground: false, // Can be enabled for productionmock data for development/testing
-      useMockLocation: false,
+      timeInterval: 2000,
+      distanceInterval: 5,
+      enableBackground: false,
+      useMockLocation: hasMock,
+      mockLat: hasMock ? mockLat + jitterLat : null,
+      mockLon: hasMock ? mockLon + jitterLon : null,
       mockLocationInterval: 2000,
     };
-    
+
     // Retry configuration
     this.permissionRetries = 0;
     this.maxPermissionRetries = 3;
-    
+
     // Performance metrics
     this.metrics = {
       totalUpdates: 0,
@@ -105,9 +116,9 @@ class LocationService extends EventEmitter {
   async requestPermission() {
     try {
       DEBUG && console.log('[LocationService] Requesting permission...');
-      
+
       const { status } = await Location.requestForegroundPermissionsAsync();
-      
+
       if (status === 'granted') {
         this.hasPermission = true;
         this.permissionRetries = 0;
@@ -139,12 +150,12 @@ class LocationService extends EventEmitter {
   async checkLocationServicesEnabled() {
     try {
       const enabled = await Location.hasServicesEnabledAsync();
-      
+
       if (!enabled) {
         this.emit('locationServicesDisabled');
         DEBUG && console.warn('[LocationService] Location services disabled');
       }
-      
+
       return enabled;
     } catch (error) {
       console.error('[LocationService] Location services check error:', error);
@@ -168,14 +179,14 @@ class LocationService extends EventEmitter {
       }
 
       DEBUG && console.log('[LocationService] Getting current location...');
-      
+
       const location = await Location.getCurrentPositionAsync({
         accuracy: this.config.accuracy,
         mayPromptForPermissionAgain: false,
       });
 
       const { latitude, longitude, accuracy } = location.coords;
-      
+
       const locationData = {
         lat: latitude,
         lon: longitude,
@@ -185,20 +196,20 @@ class LocationService extends EventEmitter {
 
       this.currentLocation = locationData;
       this.metrics.totalUpdates++;
-      
+
       DEBUG && console.log('[LocationService] Current location:', locationData);
-      
+
       return locationData;
     } catch (error) {
       console.error('[LocationService] Get location error:', error);
       this.metrics.totalErrors++;
       this.emit('locationError', { error });
-      
+
       // Return mock location for development if configured
       if (this.config.useMockLocation) {
         return this._getMockLocation();
       }
-      
+
       return null;
     }
   }
@@ -216,7 +227,7 @@ class LocationService extends EventEmitter {
       }
 
       DEBUG && console.log('[LocationService] Starting location tracking...');
-      
+
       // Check permission
       if (!this.hasPermission) {
         const granted = await this.requestPermission();
@@ -232,7 +243,7 @@ class LocationService extends EventEmitter {
       }
 
       this.metrics.startTime = Date.now();
-      
+
       // If using mock location for testing
       if (this.config.useMockLocation) {
         this._startMockTracking(onLocationChange);
@@ -248,7 +259,7 @@ class LocationService extends EventEmitter {
         },
         (location) => {
           const { latitude, longitude, accuracy } = location.coords;
-          
+
           const locationData = {
             lat: latitude,
             lon: longitude,
@@ -262,7 +273,7 @@ class LocationService extends EventEmitter {
 
           // Emit to all subscribers
           this.emit('locationUpdate', locationData);
-          
+
           // Call provided callback
           if (onLocationChange) {
             try {
@@ -281,7 +292,7 @@ class LocationService extends EventEmitter {
 
       this.isTracking = true;
       this.emit('trackingStarted');
-      
+
       DEBUG && console.log('[LocationService] Tracking started');
       return true;
     } catch (error) {
@@ -298,7 +309,7 @@ class LocationService extends EventEmitter {
   stopTracking() {
     try {
       DEBUG && console.log('[LocationService] Stopping location tracking...');
-      
+
       if (this.locationWatcher) {
         this.locationWatcher.remove();
         this.locationWatcher = null;
@@ -311,7 +322,7 @@ class LocationService extends EventEmitter {
 
       this.isTracking = false;
       this.emit('trackingStopped');
-      
+
       // Log metrics
       if (this.metrics.startTime) {
         const duration = Date.now() - this.metrics.startTime;
@@ -322,7 +333,7 @@ class LocationService extends EventEmitter {
           avgUpdatesPerSecond: (this.metrics.totalUpdates / (duration / 1000)).toFixed(2),
         });
       }
-      
+
       DEBUG && console.log('[LocationService] Tracking stopped');
     } catch (error) {
       console.error('[LocationService] Stop tracking error:', error);
@@ -373,7 +384,7 @@ class LocationService extends EventEmitter {
    */
   dispose() {
     DEBUG && console.log('[LocationService] Disposing resources...');
-    
+
     this.stopTracking();
     this.removeAllListeners();
     this.currentLocation = null;
@@ -384,7 +395,7 @@ class LocationService extends EventEmitter {
       lastUpdateTime: null,
       startTime: null,
     };
-    
+
     DEBUG && console.log('[LocationService] Disposed');
   }
 
@@ -396,17 +407,14 @@ class LocationService extends EventEmitter {
    * @private
    */
   _getMockLocation() {
-    const baseLatitude = 12.9716;
-    const baseLongitude = 77.5946;
-    
-    // Add small random offset for testing
-    const latOffset = (Math.random() - 0.5) * 0.01;
-    const lonOffset = (Math.random() - 0.5) * 0.01;
-    
+    // Use env var coords if set, else default to Gurugram for testing
+    const baseLat = this.config.mockLat ?? 28.4595;
+    const baseLon = this.config.mockLon ?? 77.0266;
+
     return {
-      lat: baseLatitude + latOffset,
-      lon: baseLongitude + lonOffset,
-      accuracy_m: Math.random() * 20 + 10,
+      lat: baseLat,
+      lon: baseLon,
+      accuracy_m: 5,
       timestamp: new Date().toISOString(),
     };
   }
@@ -418,19 +426,19 @@ class LocationService extends EventEmitter {
    */
   _startMockTracking(onLocationChange) {
     DEBUG && console.log('[LocationService] Starting mock location tracking');
-    
+
     this.isTracking = true;
     this.emit('trackingStarted');
-    
+
     this.cacheUpdateTimer = setInterval(() => {
       const location = this._getMockLocation();
-      
+
       this.currentLocation = location;
       this.metrics.totalUpdates++;
       this.metrics.lastUpdateTime = Date.now();
-      
+
       this.emit('locationUpdate', location);
-      
+
       if (onLocationChange) {
         try {
           onLocationChange(location);

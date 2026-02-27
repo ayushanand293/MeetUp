@@ -49,9 +49,23 @@ async def websocket_endpoint(
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
 
-    # 1. Authenticate (Manually verify JWT)
+    # 1. Authenticate (Manually verify JWT — supports ES256 via JWKS and HS256 fallback)
     try:
-        payload = jwt.decode(token, settings.SUPABASE_KEY, algorithms=["HS256"], options={"verify_aud": False})
+        from app.api.deps import _get_jwks_keys
+
+        unverified_header = jwt.get_unverified_header(token)
+        alg = unverified_header.get("alg", "HS256")
+        kid = unverified_header.get("kid")
+
+        if alg == "ES256" and kid:
+            keys = _get_jwks_keys()
+            public_key = keys.get(kid)
+            if not public_key:
+                raise ValueError(f"Unknown key ID: {kid}")
+            payload = jwt.decode(token, public_key, algorithms=["ES256"], options={"verify_aud": False})
+        else:
+            payload = jwt.decode(token, settings.SUPABASE_KEY, algorithms=["HS256"], options={"verify_aud": False})
+
         user_id = UUID(payload.get("sub"))
     except (PyJWTError, ValueError) as e:
         logger.warning(f"WebSocket Auth Failed: {e}")

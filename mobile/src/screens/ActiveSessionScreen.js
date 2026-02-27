@@ -26,11 +26,13 @@ import { useAuth } from '../context/AuthContext';
 import locationService from '../services/locationService';
 import realtimeService from '../services/realtimeService';
 import client from '../api/client';
+import { supabase } from '../api/supabase';
+import { getRoute, formatDistance, formatDuration, haversineDistance, TransportMode } from '../services/orsService';
 
 const DEBUG = process.env.NODE_ENV !== 'production';
 
 const ActiveSessionScreen = ({ route, navigation }) => {
-  const { friend } = route.params || {};
+  const { friend, sessionId: routeSessionId } = route.params || {};
   const { user } = useAuth();
 
   // Location state
@@ -48,6 +50,18 @@ const ActiveSessionScreen = ({ route, navigation }) => {
   const [isLoading, setIsLoading] = useState(true);
   const [isStopping, setIsStopping] = useState(false);
 
+  // Routing state
+  const [selectedMode, setSelectedMode] = useState('foot-walking');
+  const selectedModeRef = useRef('foot-walking'); // ref avoids stale closure in timeout
+  const [routeCoords, setRouteCoords] = useState(null);
+  const [routeDistance, setRouteDistance] = useState(null);
+  const [routeDuration, setRouteDuration] = useState(null);
+  const [routeLoading, setRouteLoading] = useState(false);
+  const routeFetchRef = useRef(null);
+
+  // Peer display name (passed from accept flow or friend param)
+  const peerName = friend?.display_name || friend?.name || 'Peer';
+
   // Peer info
   const [peerLastSeenText, setPeerLastSeenText] = useState('Not yet connected');
   const [peerIsStale, setPeerIsStale] = useState(false);
@@ -60,47 +74,43 @@ const ActiveSessionScreen = ({ route, navigation }) => {
   const wsEventUnsubscribesRef = useRef({});
   const countdownIntervalRef = useRef(null);
   const isMountedRef = useRef(true);
+  // WebView load state
+  const webViewReadyRef = useRef(false);
+  const lastMapDataRef = useRef(null);
 
   /**
    * Initialize session and start services
    */
   useEffect(() => {
     if (!isMountedRef.current) return;
-    
+
     const initializeSession = async () => {
       try {
         setIsLoading(true);
         setLocationError(null);
         setWsError(null);
 
-        // 1. Try to get active session from backend
-        DEBUG && console.log('[ActiveSessionScreen] Fetching active session...');
-        let activeSession = null;
-        let isDemo = false;
-        
-        try {
+        // 1. Resolve session ID — prefer route param (from accept flow), otherwise fetch from backend
+        let activeSessionId = routeSessionId;
+
+        if (!activeSessionId) {
+          DEBUG && console.log('[ActiveSessionScreen] Fetching active session from backend...');
           const sessionResponse = await client.get('/sessions/active');
-          activeSession = sessionResponse.data;
-        } catch (error) {
-          console.warn('[ActiveSessionScreen] Backend not available, starting in demo mode');
-          isDemo = true;
-          // Generate demo session
-          activeSession = {
-            session_id: 'demo_' + Math.random().toString(36).substr(2, 9),
-          };
+          const activeSession = sessionResponse.data;
+          if (!activeSession || !activeSession.session_id) {
+            throw new Error('No active session found. Ask your friend to send you a meet request first.');
+          }
+          activeSessionId = activeSession.session_id;
         }
 
-        if (!activeSession) {
-          throw new Error('No active session found');
-        }
-
-        setSessionId(activeSession.session_id);
+        setSessionId(activeSessionId);
+        DEBUG && console.log('[ActiveSessionScreen] Session ID:', activeSessionId);
 
         // 2. Request location permission
         DEBUG && console.log('[ActiveSessionScreen] Requesting location permission...');
         const hasPermission = await locationService.requestPermission();
         if (!hasPermission) {
-          throw new Error('Location permission required to share your location');
+          throw new Error('Location permission is required to share your location.');
         }
 
         // 3. Start location tracking
@@ -111,7 +121,7 @@ const ActiveSessionScreen = ({ route, navigation }) => {
         });
 
         if (!trackingStarted) {
-          throw new Error('Failed to start location tracking');
+          throw new Error('Failed to start location tracking.');
         }
 
         // 4. Get initial location
@@ -120,54 +130,31 @@ const ActiveSessionScreen = ({ route, navigation }) => {
           setMyLocation(initialLocation);
         }
 
-        // 5. Connect WebSocket only if not in demo mode and have auth
-        if (!isDemo) {
-          DEBUG && console.log('[ActiveSessionScreen] Connecting WebSocket...');
-          const { data: session } = await client.auth.getSession();
-          if (!session?.access_token) {
-            console.warn('[ActiveSessionScreen] No auth token, running in demo mode');
-            isDemo = true;
-          } else {
-            // Subscribe to WebSocket events
-            _subscribeToWsEvents();
-            
-            await realtimeService.connect(
-              session.access_token,
-              activeSession.session_id,
-              'http://localhost:8000'
-            );
-            
-            DEBUG && console.log('[ActiveSessionScreen] WebSocket connected');
-          }
+        // 5. Connect WebSocket with real auth token
+        DEBUG && console.log('[ActiveSessionScreen] Connecting WebSocket...');
+        const { data: { session: supabaseSession } } = await supabase.auth.getSession();
+        if (!supabaseSession?.access_token) {
+          throw new Error('You are not signed in. Please sign in and try again.');
         }
 
-        if (isDemo) {
-          // Demo mode: Simulate peer location updates
-          DEBUG && console.log('[ActiveSessionScreen] Running in demo mode');
-          
-          // Subscribe to WS events for demo simulation
-          _subscribeToWsEvents();
-          
-          // Simulate peer location
-          setPeerLocation({
-            lat: 37.7849,
-            lon: -122.4094,
-            accuracy_m: 50,
-            receivedAt: new Date()
-          });
-          
-          // Simulate connection status
-          setWsStatus('connected');
-        }
+        _subscribeToWsEvents();
 
+        const wsBaseUrl = client.defaults.baseURL.replace('/api/v1', '');
+        await realtimeService.connect(
+          supabaseSession.access_token,
+          activeSessionId,
+          wsBaseUrl
+        );
+
+        DEBUG && console.log('[ActiveSessionScreen] WebSocket connected');
         setIsLoading(false);
       } catch (error) {
         console.error('[ActiveSessionScreen] Initialization error:', error);
         if (!isMountedRef.current) return;
-        
+
         setLocationError(error.message || 'Failed to initialize session');
         setIsLoading(false);
-        
+
         Alert.alert('Error', error.message || 'Failed to initialize session', [
           {
             text: 'Go Back',
@@ -205,7 +192,7 @@ const ActiveSessionScreen = ({ route, navigation }) => {
       DEBUG && console.log('[ActiveSessionScreen] WS status changed:', data.status);
       if (!isMountedRef.current) return;
       setWsStatus(data.status);
-      
+
       if (data.status === 'reconnecting' && data.nextRetryIn) {
         setReconnectCountdown(Math.ceil(data.nextRetryIn / 1000));
       }
@@ -214,7 +201,7 @@ const ActiveSessionScreen = ({ route, navigation }) => {
     unsubscribes.onPeerLocation = realtimeService.on('peerLocation', (payload) => {
       DEBUG && console.log('[ActiveSessionScreen] Peer location received');
       if (!isMountedRef.current) return;
-      
+
       setPeerLocation({
         user_id: payload.user_id,
         lat: payload.lat,
@@ -231,7 +218,7 @@ const ActiveSessionScreen = ({ route, navigation }) => {
     unsubscribes.onPresenceUpdate = realtimeService.on('presenceUpdate', (payload) => {
       DEBUG && console.log('[ActiveSessionScreen] Presence update:', payload.status);
       if (!isMountedRef.current) return;
-      
+
       if (payload.status === 'offline') {
         setPeerLocation(null);
         setPeerLastSeenText('Offline');
@@ -242,7 +229,7 @@ const ActiveSessionScreen = ({ route, navigation }) => {
     unsubscribes.onSessionEnded = realtimeService.on('sessionEnded', (payload) => {
       DEBUG && console.log('[ActiveSessionScreen] Session ended:', payload.reason);
       if (!isMountedRef.current) return;
-      
+
       _cleanup();
       Alert.alert('Session Ended', `Reason: ${payload.reason}`, [
         {
@@ -260,9 +247,9 @@ const ActiveSessionScreen = ({ route, navigation }) => {
     unsubscribes.onError = realtimeService.on('error', (payload) => {
       console.error('[ActiveSessionScreen] WS error:', payload);
       if (!isMountedRef.current) return;
-      
+
       setWsError(`Error: ${payload.message}`);
-      
+
       if (payload.code === 'RATE_LIMIT_EXCEEDED') {
         Alert.alert('Rate Limited', 'Location updates are being sent too fast. Please slow down.');
       }
@@ -302,19 +289,68 @@ const ActiveSessionScreen = ({ route, navigation }) => {
   }, [myLocation, wsStatus]);
 
   /**
+   * Helper to safely inject map data into WebView
+   */
+  const injectMapData = useCallback((mapData) => {
+    lastMapDataRef.current = mapData;
+    if (!webViewReadyRef.current || !webViewRef.current) return;
+    const jsCode = `
+      if (window.updateMap) {
+        window.updateMap(${JSON.stringify(mapData)});
+      }
+      true;
+    `;
+    webViewRef.current.injectJavaScript(jsCode);
+  }, []);
+
+  /**
    * Update map when locations change
    */
   useEffect(() => {
-    if (webViewRef.current && (myLocation || peerLocation)) {
-      const mapData = JSON.stringify({
-        myLocation,
-        peerLocation
-      });
-      webViewRef.current.injectJavaScript(
-        `window.updateMap('${mapData.replace(/'/g, "\\'")}');`
-      );
+    if (myLocation || peerLocation) {
+      injectMapData({ myLocation, peerLocation, routeCoords, peerName });
     }
-  }, [myLocation, peerLocation]);
+  }, [myLocation, peerLocation, routeCoords, peerName, injectMapData]);
+
+  /**
+   * Fetch ORS route whenever both locations are known or mode changes
+   */
+  useEffect(() => {
+    if (!myLocation || !peerLocation) return;
+
+    // Keep ref current so the timeout closure always reads latest mode
+    selectedModeRef.current = selectedMode;
+
+    if (routeFetchRef.current) clearTimeout(routeFetchRef.current);
+    routeFetchRef.current = setTimeout(async () => {
+      const mode = selectedModeRef.current; // read from ref, not closure
+      setRouteLoading(true);
+      const result = await getRoute(myLocation, peerLocation, mode);
+      if (result) {
+        setRouteCoords(result.coordinates);
+        setRouteDistance(result.distanceM);
+        setRouteDuration(result.durationSec);
+        injectMapData({ myLocation, peerLocation, routeCoords: result.coordinates, peerName });
+      } else {
+        setRouteCoords(null);
+        setRouteDistance(haversineDistance(myLocation, peerLocation));
+        setRouteDuration(null);
+      }
+      setRouteLoading(false);
+    }, 2000); // 2s debounce
+
+    return () => clearTimeout(routeFetchRef.current);
+  }, [myLocation?.lat, myLocation?.lon, peerLocation?.lat, peerLocation?.lon, selectedMode]);
+
+  /**
+   * Once WebView is loaded, flush any pending location data
+   */
+  const handleWebViewLoadEnd = useCallback(() => {
+    webViewReadyRef.current = true;
+    if (lastMapDataRef.current) {
+      injectMapData(lastMapDataRef.current);
+    }
+  }, [injectMapData]);
 
   /**
    * Update "last seen" text every second
@@ -483,8 +519,16 @@ const ActiveSessionScreen = ({ route, navigation }) => {
           <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
           <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
           <style>
-            body { margin: 0; padding: 0; }
+            body { margin: 0; padding: 0; font-family: -apple-system, sans-serif; }
             #map { position: absolute; top: 0; bottom: 0; width: 100%; }
+            .label-icon { background: transparent; border: none; }
+            .marker-label {
+              font-size: 12px; font-weight: 700;
+              color: #fff; background: rgba(0,0,0,0.6);
+              padding: 2px 6px; border-radius: 8px;
+              white-space: nowrap; text-align: center;
+              margin-top: 4px;
+            }
           </style>
         </head>
         <body>
@@ -492,69 +536,70 @@ const ActiveSessionScreen = ({ route, navigation }) => {
           <script>
             const map = L.map('map').setView([37.7749, -122.4194], 14);
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-              attribution: '© OpenStreetMap contributors',
+              attribution: '\u00a9 OpenStreetMap contributors',
               maxZoom: 19
             }).addTo(map);
 
-            let myMarker, peerMarker, myCircle, peerCircle;
+            let myMarker, peerMarker, myLabel, peerLabel, myCircle, peerCircle, routeLine;
+            let firstFit = true;
+
+            function makeLabel(text, color) {
+              return L.divIcon({
+                className: 'label-icon',
+                html: '<div class="marker-label" style="background:' + color + '88">' + text + '</div>',
+                iconAnchor: [20, -10]
+              });
+            }
 
             window.updateMap = (data) => {
-              const { myLocation, peerLocation } = JSON.parse(data);
-              
+              const { myLocation, peerLocation, routeCoords, peerName } = data;
+              const peer = peerName || 'Peer';
+
               if (myLocation) {
                 const { lat, lon, accuracy_m } = myLocation;
-                
                 if (myMarker) {
                   myMarker.setLatLng([lat, lon]);
+                  if (myCircle) { myCircle.setLatLng([lat, lon]); myCircle.setRadius(accuracy_m || 10); }
                 } else {
                   myMarker = L.circleMarker([lat, lon], {
-                    radius: 8,
-                    color: '#007AFF',
-                    fillColor: '#007AFF',
-                    fillOpacity: 1
-                  }).bindPopup('You').addTo(map);
+                    radius: 9, color: '#007AFF', fillColor: '#007AFF', fillOpacity: 1, weight: 2
+                  }).bindTooltip('Me', { permanent: false }).addTo(map);
+                  myLabel = L.marker([lat, lon], { icon: makeLabel('Me', '#007AFF'), interactive: false }).addTo(map);
+                  myCircle = L.circle([lat, lon], { radius: accuracy_m || 10, color: '#007AFF', fillColor: '#007AFF', fillOpacity: 0.08, weight: 1 }).addTo(map);
                 }
-                
-                if (myCircle) {
-                  myCircle.setRadius(accuracy_m);
-                } else {
-                  myCircle = L.circle([lat, lon], {
-                    radius: accuracy_m,
-                    color: 'rgba(0, 122, 255, 0.3)',
-                    fill: true,
-                    fillColor: 'rgba(0, 122, 255, 0.1)',
-                    fillOpacity: 0.1
-                  }).addTo(map);
-                }
-                
-                map.flyTo([lat, lon], 14, { animate: true, duration: 0.5 });
+                if (myLabel) myLabel.setLatLng([lat, lon]);
               }
-              
+
               if (peerLocation) {
                 const { lat, lon, accuracy_m } = peerLocation;
-                
                 if (peerMarker) {
                   peerMarker.setLatLng([lat, lon]);
+                  if (peerCircle) { peerCircle.setLatLng([lat, lon]); peerCircle.setRadius(accuracy_m || 10); }
                 } else {
                   peerMarker = L.circleMarker([lat, lon], {
-                    radius: 8,
-                    color: '#22C55E',
-                    fillColor: '#22C55E',
-                    fillOpacity: 1
-                  }).bindPopup('Peer').addTo(map);
+                    radius: 9, color: '#22C55E', fillColor: '#22C55E', fillOpacity: 1, weight: 2
+                  }).bindTooltip(peer, { permanent: false }).addTo(map);
+                  peerLabel = L.marker([lat, lon], { icon: makeLabel(peer, '#22C55E'), interactive: false }).addTo(map);
+                  peerCircle = L.circle([lat, lon], { radius: accuracy_m || 10, color: '#22C55E', fillColor: '#22C55E', fillOpacity: 0.08, weight: 1 }).addTo(map);
                 }
-                
-                if (peerCircle) {
-                  peerCircle.setRadius(accuracy_m);
-                } else {
-                  peerCircle = L.circle([lat, lon], {
-                    radius: accuracy_m,
-                    color: 'rgba(34, 197, 94, 0.3)',
-                    fill: true,
-                    fillColor: 'rgba(34, 197, 94, 0.1)',
-                    fillOpacity: 0.1
-                  }).addTo(map);
-                }
+                if (peerLabel) peerLabel.setLatLng([lat, lon]);
+              }
+
+              // Draw / update route polyline
+              if (routeCoords && routeCoords.length > 1) {
+                if (routeLine) routeLine.setLatLngs(routeCoords);
+                else routeLine = L.polyline(routeCoords, { color: '#007AFF', weight: 4, opacity: 0.75, dashArray: '8 4' }).addTo(map);
+              } else if (routeLine) {
+                routeLine.remove(); routeLine = null;
+              }
+
+              // Fit both markers on first load
+              if (firstFit && myLocation && peerLocation) {
+                firstFit = false;
+                const bounds = L.latLngBounds([[myLocation.lat, myLocation.lon], [peerLocation.lat, peerLocation.lon]]);
+                map.fitBounds(bounds.pad(0.25));
+              } else if (myLocation && !peerLocation) {
+                map.setView([myLocation.lat, myLocation.lon], 15);
               }
             };
           </script>
@@ -582,6 +627,7 @@ const ActiveSessionScreen = ({ route, navigation }) => {
         javaScriptEnabled={true}
         domStorageEnabled={true}
         startInLoadingState={true}
+        onLoadEnd={handleWebViewLoadEnd}
         renderLoading={() => (
           <View style={styles.mapLoading}>
             <ActivityIndicator size="large" color="#007AFF" />
@@ -612,10 +658,10 @@ const ActiveSessionScreen = ({ route, navigation }) => {
           {wsStatus === 'connected'
             ? 'Connected'
             : wsStatus === 'reconnecting'
-            ? `Reconnecting... ${reconnectCountdown}s`
-            : wsStatus === 'failed'
-            ? 'Connection Failed'
-            : 'Disconnected'}
+              ? `Reconnecting... ${reconnectCountdown}s`
+              : wsStatus === 'failed'
+                ? 'Connection Failed'
+                : 'Disconnected'}
         </Text>
       </View>
 
@@ -628,21 +674,44 @@ const ActiveSessionScreen = ({ route, navigation }) => {
         </View>
       )}
 
-      {/* Bottom Controls */}
+      {/* Bottom Panel */}
       <View style={styles.bottomPanel}>
-        {friend && (
-          <View style={styles.friendInfo}>
-            <Text style={styles.friendName}>{friend.name || 'Peer'}</Text>
-            <Text style={styles.friendSubtitle}>
-              {peerLocation
-                ? `Last seen: ${peerLastSeenText}`
-                : 'Waiting for location...'}
+        {/* Peer info + distance */}
+        <View style={styles.infoRow}>
+          <View style={styles.peerInfo}>
+            <Text style={styles.peerName}>{peerName}</Text>
+            <Text style={styles.peerSub}>
+              {peerLocation ? `Last seen: ${peerLastSeenText}` : 'Waiting for location...'}
             </Text>
-            {peerIsStale && peerLocation && (
-              <Text style={styles.staleWarning}>
-                ⚠️ Location might be outdated
-              </Text>
-            )}
+          </View>
+          {routeDistance != null && (
+            <View style={styles.distanceBadge}>
+              <Text style={styles.distanceValue}>{formatDistance(routeDistance)}</Text>
+              {routeDuration != null && (
+                <Text style={styles.etaValue}>{formatDuration(routeDuration)} away</Text>
+              )}
+            </View>
+          )}
+        </View>
+
+        {/* Transport mode tabs */}
+        {peerLocation && (
+          <View style={styles.modeTabs}>
+            {Object.values(TransportMode).map(mode => (
+              <TouchableOpacity
+                key={mode.id}
+                style={[styles.modeTab, selectedMode === mode.id && styles.modeTabActive]}
+                onPress={() => setSelectedMode(mode.id)}
+              >
+                <Text style={styles.modeIcon}>{mode.icon}</Text>
+                <Text style={[styles.modeLabel, selectedMode === mode.id && styles.modeLabelActive]}>
+                  {mode.label}
+                </Text>
+                {routeLoading && selectedMode === mode.id && (
+                  <ActivityIndicator size="small" color="#007AFF" style={{ marginLeft: 4 }} />
+                )}
+              </TouchableOpacity>
+            ))}
           </View>
         )}
 
@@ -760,28 +829,25 @@ const styles = StyleSheet.create({
     shadowRadius: 6,
     elevation: 8,
   },
-  friendInfo: {
-    marginBottom: 16,
-    paddingBottom: 12,
-    borderBottomColor: '#f0f0f0',
-    borderBottomWidth: 1,
+  infoRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
+  peerInfo: { flex: 1 },
+  peerName: { fontSize: 17, fontWeight: '700', color: '#333' },
+  peerSub: { fontSize: 12, color: '#888', marginTop: 2 },
+  distanceBadge: { alignItems: 'flex-end' },
+  distanceValue: { fontSize: 20, fontWeight: '800', color: '#007AFF' },
+  etaValue: { fontSize: 11, color: '#888', marginTop: 1 },
+  modeTabs: {
+    flexDirection: 'row', marginBottom: 12,
+    backgroundColor: '#f0f0f0', borderRadius: 10, padding: 2,
   },
-  friendName: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#333',
-    marginBottom: 4,
+  modeTab: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    paddingVertical: 7, borderRadius: 8,
   },
-  friendSubtitle: {
-    fontSize: 13,
-    color: '#666',
-  },
-  staleWarning: {
-    fontSize: 12,
-    color: '#FF9500',
-    marginTop: 4,
-    fontWeight: '600',
-  },
+  modeTabActive: { backgroundColor: '#fff', shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 3, elevation: 2 },
+  modeIcon: { fontSize: 14, marginRight: 4 },
+  modeLabel: { fontSize: 12, color: '#888' },
+  modeLabelActive: { color: '#007AFF', fontWeight: '700' },
   mapLoading: {
     ...StyleSheet.absoluteFillObject,
     justifyContent: 'center',
