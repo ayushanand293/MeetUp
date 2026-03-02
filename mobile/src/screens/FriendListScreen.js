@@ -1,169 +1,101 @@
 import React, { useState, useCallback, useRef } from 'react';
 import {
-    View,
-    Text,
-    TextInput,
-    FlatList,
-    TouchableOpacity,
-    StyleSheet,
-    ActivityIndicator,
-    Alert,
+    View, Text, TextInput, FlatList, TouchableOpacity,
+    ActivityIndicator, Alert, Animated,
 } from 'react-native';
 import client from '../api/client';
+import { useTheme, Spacing, Radius, Font, anim } from '../theme';
 
 const FriendListScreen = ({ navigation }) => {
+    const { colors } = useTheme();
     const [query, setQuery] = useState('');
     const [results, setResults] = useState([]);
     const [searching, setSearching] = useState(false);
     const [searched, setSearched] = useState(false);
+    const [focusBorder, setFocusBorder] = useState(false);
     const debounceRef = useRef(null);
 
     const searchUsers = useCallback(async (text) => {
-        if (text.trim().length < 2) {
-            setResults([]);
-            setSearched(false);
-            return;
-        }
+        if (text.trim().length < 2) { setResults([]); setSearched(false); return; }
         setSearching(true);
         try {
-            const response = await client.get(`/users/search?name=${encodeURIComponent(text.trim())}`);
-            setResults(response.data || []);
-            setSearched(true);
-        } catch (error) {
-            console.error('Search error:', error);
-            Alert.alert('Error', error.response?.data?.detail || 'Search failed. Make sure you are signed in.');
-        } finally {
-            setSearching(false);
-        }
+            const res = await client.get(`/users/search?name=${encodeURIComponent(text.trim())}`);
+            setResults(res.data || []); setSearched(true);
+        } catch (err) { Alert.alert('Error', err.response?.data?.detail || 'Search failed.'); }
+        finally { setSearching(false); }
     }, []);
 
     const handleTextChange = (text) => {
         setQuery(text);
         if (debounceRef.current) clearTimeout(debounceRef.current);
-        debounceRef.current = setTimeout(() => {
-            searchUsers(text);
-        }, 500);
+        debounceRef.current = setTimeout(() => searchUsers(text), 500);
     };
 
-    const handleSelectFriend = (friend) => {
-        navigation.navigate('Request', { friend });
-    };
-
-    const renderItem = ({ item }) => (
-        <TouchableOpacity style={styles.card} onPress={() => handleSelectFriend(item)}>
-            <View style={styles.avatar}>
-                <Text style={styles.avatarText}>{item.display_name?.[0]?.toUpperCase() || '?'}</Text>
-            </View>
-            <View style={styles.infoContainer}>
-                <Text style={styles.name}>{item.display_name}</Text>
-                <Text style={styles.email}>{item.email}</Text>
-            </View>
-            <Text style={styles.arrow}>›</Text>
-        </TouchableOpacity>
-    );
+    const renderItem = ({ item, index }) => <UserRow item={item} index={index} colors={colors} onPress={() => navigation.navigate('Request', { friend: item })} />;
 
     return (
-        <View style={styles.container}>
-            <View style={styles.searchContainer}>
-                <TextInput
-                    style={styles.searchInput}
-                    placeholder="Search by name..."
-                    value={query}
-                    onChangeText={handleTextChange}
-                    autoCapitalize="words"
-                    clearButtonMode="while-editing"
-                    returnKeyType="search"
-                />
-                {searching && <ActivityIndicator style={styles.searchSpinner} color="#007AFF" />}
+        <View style={{ flex: 1, backgroundColor: colors.bg, padding: Spacing.lg }}>
+            <View style={{ marginBottom: Spacing.lg, paddingTop: Spacing.md }}>
+                <Text style={[Font.title, { color: colors.textPrimary }]}>Find a Friend</Text>
+                <Text style={[Font.body, { color: colors.textSecondary, marginTop: 4 }]}>Search by name to send a meet request</Text>
             </View>
 
-            {!searched && query.length < 2 && (
-                <View style={styles.hint}>
-                    <Text style={styles.hintIcon}>🔍</Text>
-                    <Text style={styles.hintTitle}>Find a Friend</Text>
-                    <Text style={styles.hintText}>
-                        Type at least 2 characters to search for a friend by their display name.
-                    </Text>
-                </View>
-            )}
+            <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surface, borderRadius: Radius.md, borderWidth: 1, borderColor: focusBorder ? colors.textMuted : colors.border, paddingHorizontal: Spacing.md, marginBottom: Spacing.lg }}>
+                <Text style={{ fontSize: 20, color: colors.textMuted, marginRight: 8 }}>⌕</Text>
+                <TextInput style={{ flex: 1, paddingVertical: 13, color: colors.textPrimary, fontSize: 15 }}
+                    placeholder="Search by name..." placeholderTextColor={colors.textMuted}
+                    value={query} onChangeText={handleTextChange} autoCapitalize="none"
+                    onFocus={() => setFocusBorder(true)} onBlur={() => setFocusBorder(false)} />
+                {searching && <ActivityIndicator size="small" color={colors.textMuted} />}
+                {query.length > 0 && !searching && (
+                    <TouchableOpacity onPress={() => { setQuery(''); setResults([]); setSearched(false); }}>
+                        <Text style={{ color: colors.textMuted, fontSize: 14, padding: 4 }}>✕</Text>
+                    </TouchableOpacity>
+                )}
+            </View>
 
             {searched && results.length === 0 && !searching && (
-                <View style={styles.hint}>
-                    <Text style={styles.hintIcon}>😕</Text>
-                    <Text style={styles.hintTitle}>No results for "{query}"</Text>
-                    <Text style={styles.hintText}>
-                        Make sure your friend has signed up and set their display name.
-                    </Text>
+                <View style={{ alignItems: 'center', paddingTop: Spacing.xxl }}>
+                    <Text style={{ fontSize: 48, color: colors.textMuted, marginBottom: Spacing.md }}>◎</Text>
+                    <Text style={[Font.subtitle, { color: colors.textPrimary, marginBottom: 6 }]}>No users found</Text>
+                    <Text style={[Font.body, { color: colors.textSecondary }]}>Try a different name</Text>
                 </View>
             )}
 
-            <FlatList
-                data={results}
-                keyExtractor={(item) => item.id}
-                renderItem={renderItem}
-                contentContainerStyle={styles.list}
-                keyboardShouldPersistTaps="handled"
-            />
+            <FlatList data={results} keyExtractor={item => item.id} renderItem={renderItem}
+                contentContainerStyle={{ paddingBottom: Spacing.xxl }} showsVerticalScrollIndicator={false} />
         </View>
     );
 };
 
-const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: '#f5f5f5' },
-    searchContainer: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: '#fff',
-        margin: 16,
-        borderRadius: 12,
-        borderWidth: 1,
-        borderColor: '#e0e0e0',
-        paddingHorizontal: 16,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.06,
-        shadowRadius: 4,
-        elevation: 2,
-    },
-    searchInput: {
-        flex: 1,
-        height: 50,
-        fontSize: 16,
-        color: '#333',
-    },
-    searchSpinner: { marginLeft: 8 },
-    hint: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 32, marginTop: -60 },
-    hintIcon: { fontSize: 40, marginBottom: 12 },
-    hintTitle: { fontSize: 18, fontWeight: '700', color: '#333', marginBottom: 8 },
-    hintText: { fontSize: 14, color: '#999', textAlign: 'center', lineHeight: 20 },
-    list: { paddingHorizontal: 16 },
-    card: {
-        backgroundColor: '#fff',
-        padding: 14,
-        borderRadius: 12,
-        marginBottom: 10,
-        flexDirection: 'row',
-        alignItems: 'center',
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.08,
-        shadowRadius: 3,
-        elevation: 2,
-    },
-    avatar: {
-        width: 44,
-        height: 44,
-        borderRadius: 22,
-        backgroundColor: '#007AFF',
-        justifyContent: 'center',
-        alignItems: 'center',
-        marginRight: 12,
-    },
-    avatarText: { color: '#fff', fontSize: 18, fontWeight: 'bold' },
-    infoContainer: { flex: 1 },
-    name: { fontSize: 16, fontWeight: '600', color: '#333' },
-    email: { fontSize: 13, color: '#999', marginTop: 2 },
-    arrow: { fontSize: 22, color: '#ccc' },
-});
+const UserRow = ({ item, index, colors, onPress }) => {
+    const scale = useRef(new Animated.Value(1)).current;
+    const translateY = useRef(new Animated.Value(20)).current;
+    const opacity = useRef(new Animated.Value(0)).current;
+
+    React.useEffect(() => {
+        Animated.parallel([
+            Animated.timing(translateY, { toValue: 0, duration: 250, delay: index * 45, useNativeDriver: true }),
+            Animated.timing(opacity, { toValue: 1, duration: 250, delay: index * 45, useNativeDriver: true }),
+        ]).start();
+    }, []);
+
+    return (
+        <Animated.View style={{ transform: [{ translateY }, { scale }], opacity }}>
+            <TouchableOpacity
+                style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surface, borderRadius: Radius.md, padding: Spacing.md, marginBottom: Spacing.sm, borderWidth: 1, borderColor: colors.border }}
+                onPress={onPress} onPressIn={() => anim.pressIn(scale)} onPressOut={() => anim.pressOut(scale)}>
+                <View style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: colors.surfaceElevated, borderWidth: 1, borderColor: colors.border, justifyContent: 'center', alignItems: 'center', marginRight: 12 }}>
+                    <Text style={{ color: colors.textPrimary, fontWeight: '700', fontSize: 18 }}>{item.display_name?.[0]?.toUpperCase() || '?'}</Text>
+                </View>
+                <View style={{ flex: 1 }}>
+                    <Text style={[Font.subtitle, { color: colors.textPrimary, fontSize: 15 }]}>{item.display_name}</Text>
+                    <Text style={[Font.caption, { color: colors.textMuted, marginTop: 2 }]}>{item.email}</Text>
+                </View>
+                <Text style={{ color: colors.accent, fontSize: 13, fontWeight: '700' }}>Meet →</Text>
+            </TouchableOpacity>
+        </Animated.View>
+    );
+};
 
 export default FriendListScreen;

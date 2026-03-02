@@ -2,6 +2,7 @@ import React from 'react';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AuthProvider } from './src/context/AuthContext';
+import { ThemeProvider } from './src/context/ThemeContext';
 import AppNavigator from './src/navigation/AppNavigator';
 import * as Linking from 'expo-linking';
 
@@ -15,11 +16,13 @@ export default function App() {
   console.log('Add this URL to your Supabase Redirect URLs:', redirectUrl);
   console.log('-----------------------');
   return (
-    <SafeAreaProvider>
-      <AuthProvider>
-        <StatusBar style="auto" />
-        <AppNavigator />
-      </AuthProvider>
-    </SafeAreaProvider>
+    <ThemeProvider>
+      <SafeAreaProvider>
+        <AuthProvider>
+          <StatusBar style="auto" />
+          <AppNavigator />
+        </AuthProvider>
+      </SafeAreaProvider>
+    </ThemeProvider>
   );
 }
