@@ -251,11 +251,13 @@ const ActiveSessionScreen = ({ route, navigation }) => {
       console.error('[ActiveSessionScreen] WS error:', payload);
       if (!isMountedRef.current) return;
 
-      setWsError(`Error: ${payload.message}`);
-
+      // Suppress rate limit errors from alerting user - handled transparently by client-side throttling
       if (payload.code === 'RATE_LIMIT_EXCEEDED') {
-        Alert.alert('Rate Limited', 'Location updates are being sent too fast. Please slow down.');
+        DEBUG && console.log('[ActiveSessionScreen] Rate limit (suppressed for UX)');
+        return;
       }
+
+      setWsError(`Error: ${payload.message}`);
     });
 
     wsEventUnsubscribesRef.current = unsubscribes;
@@ -282,7 +284,7 @@ const ActiveSessionScreen = ({ route, navigation }) => {
         );
         DEBUG && sent && console.log('[ActiveSessionScreen] Location update sent');
       }
-    }, 2000); // Every 2 seconds
+    }, 3000); // Every 3 seconds
 
     return () => {
       if (locationIntervalRef.current) {

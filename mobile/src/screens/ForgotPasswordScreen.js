@@ -1,32 +1,16 @@
 import React, { useState, useRef, useEffect } from 'react';
-import {
-<<<<<<< Updated upstream
-    View,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    StyleSheet,
-    Alert,
-    ActivityIndicator,
-    KeyboardAvoidingView,
-    Platform,
-    ScrollView,
-=======
-  View, Text, TextInput, TouchableOpacity, StyleSheet,
-  Alert, ActivityIndicator, KeyboardAvoidingView, Platform,
-  ScrollView, Animated,
->>>>>>> Stashed changes
-} from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView, Animated } from 'react-native';
 import { useAuth } from '../context/AuthContext';
 import { useTheme, Spacing, Radius, Font, anim } from '../theme';
 
 const ForgotPasswordScreen = ({ navigation }) => {
-<<<<<<< Updated upstream
-    const [email, setEmail] = useState('');
-    const [otp, setOtp] = useState('');
-    const [newPassword, setNewPassword] = useState('');
-    const [step, setStep] = useState(1); // 1: Request, 2: Reset
-    const { resetPasswordForEmail, updateUserPassword, loading } = useAuth();
+  const [email, setEmail] = useState('');
+  const [otp, setOtp] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [step, setStep] = useState(1);
+  const { resetPasswordForEmail, updateUserPassword, loading } = useAuth();
+  const { colors } = useTheme();
+  const scaleAnim = useRef(new Animated.Value(0)).current;
 
     const handleRequestReset = async () => {
         if (!email.trim()) {
@@ -231,101 +215,4 @@ const styles = StyleSheet.create({
     },
 });
 
-=======
-  const { colors } = useTheme();
-  const [email, setEmail] = useState('');
-  const [newPassword, setNewPassword] = useState('');
-  const [step, _setStep] = useState(1);
-  const [focused, setFocused] = useState(null);
-  const { resetPasswordForEmail, updateUserPassword, loading } = useAuth();
-
-  const cardY = useRef(new Animated.Value(30)).current;
-  const cardOpacity = useRef(new Animated.Value(0)).current;
-  const btnScale = useRef(new Animated.Value(1)).current;
-
-  useEffect(() => {
-    Animated.parallel([
-      Animated.spring(cardY, { toValue: 0, useNativeDriver: true, tension: 80 }),
-      Animated.timing(cardOpacity, { toValue: 1, duration: 400, useNativeDriver: true }),
-    ]).start();
-  }, []);
-
-  const handleRequestReset = async () => {
-    if (!email.trim()) { Alert.alert('Error', 'Enter your email'); return; }
-    try {
-      await resetPasswordForEmail(email.trim());
-      Alert.alert('Check your email', 'If an account exists, we sent a reset link.', [{ text: 'OK' }]);
-    } catch (e) { Alert.alert('Error', e.message); }
-  };
-
-  const handleUpdatePassword = async () => {
-    if (!newPassword || newPassword.length < 6) { Alert.alert('Error', 'Min. 6 characters'); return; }
-    try {
-      await updateUserPassword(newPassword);
-      Alert.alert('Success', 'Password updated.', [{ text: 'OK', onPress: () => navigation.navigate('Login') }]);
-    } catch (e) { Alert.alert('Error', e.message); }
-  };
-
-  return (
-    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1, backgroundColor: colors.bg }}>
-      <ScrollView contentContainerStyle={{ flexGrow: 1, padding: Spacing.lg, justifyContent: 'center' }} keyboardShouldPersistTaps="handled">
-
-        <View style={{ alignItems: 'center', marginBottom: Spacing.xl }}>
-          <Text style={[Font.title, { color: colors.textPrimary }]}>{step === 1 ? 'Forgot Password' : 'Reset Password'}</Text>
-          <Text style={[Font.body, { color: colors.textSecondary, marginTop: 6, textAlign: 'center' }]}>
-            {step === 1 ? 'Enter your email to receive a reset link' : 'Enter your new password'}
-          </Text>
-        </View>
-
-        <Animated.View style={{ backgroundColor: colors.surface, borderRadius: Radius.xl, padding: Spacing.lg, borderWidth: 1, borderColor: colors.border, opacity: cardOpacity, transform: [{ translateY: cardY }] }}>
-          {step === 1 ? (
-            <>
-              <View style={{ marginBottom: Spacing.md }}>
-                <Text style={[Font.label, { color: colors.textMuted, marginBottom: 6 }]}>EMAIL</Text>
-                <TextInput
-                  style={{ backgroundColor: colors.inputBg, borderWidth: 1, borderColor: focused === 'email' ? colors.textMuted : colors.border, borderRadius: Radius.md, padding: 14, color: colors.textPrimary, fontSize: 15 }}
-                  placeholder="you@example.com" placeholderTextColor={colors.textMuted}
-                  value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none"
-                  onFocus={() => setFocused('email')} onBlur={() => setFocused(null)}
-                />
-              </View>
-              <Animated.View style={{ transform: [{ scale: btnScale }] }}>
-                <TouchableOpacity style={{ backgroundColor: colors.textPrimary, borderRadius: Radius.md, paddingVertical: 15, alignItems: 'center' }}
-                  onPressIn={() => anim.pressIn(btnScale)} onPressOut={() => anim.pressOut(btnScale)}
-                  onPress={handleRequestReset} disabled={loading}>
-                  {loading ? <ActivityIndicator color={colors.bg} /> : <Text style={{ color: colors.bg, fontSize: 15, fontWeight: '700' }}>Send Reset Link</Text>}
-                </TouchableOpacity>
-              </Animated.View>
-            </>
-          ) : (
-            <>
-              <View style={{ marginBottom: Spacing.md }}>
-                <Text style={[Font.label, { color: colors.textMuted, marginBottom: 6 }]}>NEW PASSWORD</Text>
-                <TextInput
-                  style={{ backgroundColor: colors.inputBg, borderWidth: 1, borderColor: focused === 'pass' ? colors.textMuted : colors.border, borderRadius: Radius.md, padding: 14, color: colors.textPrimary, fontSize: 15 }}
-                  placeholder="Min. 6 characters" placeholderTextColor={colors.textMuted}
-                  value={newPassword} onChangeText={setNewPassword} secureTextEntry
-                  onFocus={() => setFocused('pass')} onBlur={() => setFocused(null)}
-                />
-              </View>
-              <Animated.View style={{ transform: [{ scale: btnScale }] }}>
-                <TouchableOpacity style={{ backgroundColor: colors.textPrimary, borderRadius: Radius.md, paddingVertical: 15, alignItems: 'center' }}
-                  onPressIn={() => anim.pressIn(btnScale)} onPressOut={() => anim.pressOut(btnScale)}
-                  onPress={handleUpdatePassword} disabled={loading}>
-                  {loading ? <ActivityIndicator color={colors.bg} /> : <Text style={{ color: colors.bg, fontSize: 15, fontWeight: '700' }}>Update Password</Text>}
-                </TouchableOpacity>
-              </Animated.View>
-            </>
-          )}
-
-          <TouchableOpacity style={{ marginTop: Spacing.lg, alignItems: 'center' }} onPress={() => navigation.navigate('Login')}>
-            <Text style={[Font.body, { color: colors.textSecondary }]}>Back to sign in</Text>
-          </TouchableOpacity>
-        </Animated.View>
-      </ScrollView>
-    </KeyboardAvoidingView>
-  );
-};
-
->>>>>>> Stashed changes
 export default ForgotPasswordScreen;

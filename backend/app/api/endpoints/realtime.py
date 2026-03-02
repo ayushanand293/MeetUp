@@ -96,24 +96,24 @@ async def websocket_endpoint(
                 track_message_received(event_type)
 
                 if event_type == EventType.LOCATION_UPDATE:
-                    # 5. Rate limiting check
-                    rate_limit_key = f"{session_uuid}:{user_id}"
-                    count = await redis_client.incr(f"ratelimit:{rate_limit_key}")
+                    # 5. Rate limiting check (1 update per 3 seconds per user, per session)
+                    from datetime import datetime
+                    last_update_key = f"last_update:{session_uuid}:{user_id}"
+                    last_update_ts = await redis_client.get(last_update_key)
 
-                    if count == 1:
-                        # First increment in window, set TTL
-                        await redis_client.expire(f"ratelimit:{rate_limit_key}", RATE_LIMIT_WINDOW_SEC)
-
-                    if count > RATE_LIMIT_MESSAGES_PER_SEC:
-                        track_rate_limit_hit()
-                        error_event = ErrorEvent(
-                            payload=ErrorPayload(
-                                code="RATE_LIMIT_EXCEEDED",
-                                message=f"Max {RATE_LIMIT_MESSAGES_PER_SEC} messages per second",
+                    if last_update_ts:
+                        last_update = float(last_update_ts)
+                        now = datetime.utcnow().timestamp()
+                        if (now - last_update) < 3.0:  # Less than 3 seconds (1 update per 3s)
+                            track_rate_limit_hit()
+                            error_event = ErrorEvent(
+                                payload=ErrorPayload(
+                                    code="RATE_LIMIT_EXCEEDED",
+                                    message="Maximum 1 location update per 3 seconds",
+                                )
                             )
-                        )
-                        await websocket.send_text(error_event.model_dump_json())
-                        continue
+                            await websocket.send_text(error_event.model_dump_json())
+                            continue
 
                     # 6. Parse and validate location update
                     try:

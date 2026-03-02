@@ -122,6 +122,9 @@ class RealtimeService extends EventEmitter {
     // Pending requests (for request-response pattern)
     this.pendingRequests = new Map();
     this.requestTimeout = 5000; // 5 seconds
+    
+    // Client-side throttling for location updates (align with server 3s limit)
+    this.lastLocationSentTime = 0;
   }
 
   /**
@@ -177,13 +180,23 @@ class RealtimeService extends EventEmitter {
   }
 
   /**
-   * Send location update
+   * Send location update with client-side throttling (1 per 3 seconds)
    * @param {number} lat - Latitude
    * @param {number} lon - Longitude
    * @param {number} accuracy_m - Accuracy in meters
    * @returns {boolean}
    */
   sendLocationUpdate(lat, lon, accuracy_m = 10) {
+    const now = Date.now();
+    const timeSinceLastSent = now - this.lastLocationSentTime;
+    const THROTTLE_MS = 3000; // 3 seconds (align with server limit)
+
+    // Enforce client-side throttle to prevent rate limit errors
+    if (timeSinceLastSent < THROTTLE_MS) {
+      DEBUG && console.debug(`[RealtimeService] Throttled location update (${THROTTLE_MS - timeSinceLastSent}ms remaining)`);
+      return false; // Silently skip, don't queue
+    }
+
     if (!this._isConnected()) {
       DEBUG && console.warn('[RealtimeService] Not connected, queuing location update');
       this._queueMessage({
@@ -203,7 +216,11 @@ class RealtimeService extends EventEmitter {
       },
     };
 
-    return this._sendMessage(payload);
+    const sent = this._sendMessage(payload);
+    if (sent) {
+      this.lastLocationSentTime = now;
+    }
+    return sent;
   }
 
   /**
