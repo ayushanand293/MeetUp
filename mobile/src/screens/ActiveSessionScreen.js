@@ -28,12 +28,15 @@ import realtimeService from '../services/realtimeService';
 import client from '../api/client';
 import { supabase } from '../api/supabase';
 import { getRoute, formatDistance, formatDuration, haversineDistance, TransportMode } from '../services/orsService';
+import { useTheme, Spacing, Radius, Font } from '../theme';
 
 const DEBUG = process.env.NODE_ENV !== 'production';
 
 const ActiveSessionScreen = ({ route, navigation }) => {
   const { friend, sessionId: routeSessionId } = route.params || {};
   const { user } = useAuth();
+  const { colors, isDark } = useTheme();
+  const s = makeStyles(colors);
 
   // Location state
   const [myLocation, setMyLocation] = useState(null);
@@ -535,8 +538,9 @@ const ActiveSessionScreen = ({ route, navigation }) => {
           <div id="map"></div>
           <script>
             const map = L.map('map').setView([37.7749, -122.4194], 14);
-            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-              attribution: '\u00a9 OpenStreetMap contributors',
+            L.tileLayer('https://{s}.basemaps.cartocdn.com/${colors.mapTile}/{z}/{x}/{y}{r}.png', {
+              attribution: '\u00a9 OpenStreetMap \u00a9 CARTO',
+              subdomains: 'abcd',
               maxZoom: 19
             }).addTo(map);
 
@@ -562,10 +566,10 @@ const ActiveSessionScreen = ({ route, navigation }) => {
                   if (myCircle) { myCircle.setLatLng([lat, lon]); myCircle.setRadius(accuracy_m || 10); }
                 } else {
                   myMarker = L.circleMarker([lat, lon], {
-                    radius: 9, color: '#007AFF', fillColor: '#007AFF', fillOpacity: 1, weight: 2
-                  }).bindTooltip('Me', { permanent: false }).addTo(map);
-                  myLabel = L.marker([lat, lon], { icon: makeLabel('Me', '#007AFF'), interactive: false }).addTo(map);
-                  myCircle = L.circle([lat, lon], { radius: accuracy_m || 10, color: '#007AFF', fillColor: '#007AFF', fillOpacity: 0.08, weight: 1 }).addTo(map);
+                    radius: 10, color: '${colors.myMarker}', fillColor: '${colors.myMarker}', fillOpacity: 1, weight: 2.5
+                  }).addTo(map);
+                  myLabel = L.marker([lat, lon], { icon: makeLabel('Me', '${colors.myMarker}'), interactive: false }).addTo(map);
+                  myCircle = L.circle([lat, lon], { radius: accuracy_m || 10, color: '${colors.myMarker}', fillColor: '${colors.myMarker}', fillOpacity: 0.06, weight: 1 }).addTo(map);
                 }
                 if (myLabel) myLabel.setLatLng([lat, lon]);
               }
@@ -577,21 +581,18 @@ const ActiveSessionScreen = ({ route, navigation }) => {
                   if (peerCircle) { peerCircle.setLatLng([lat, lon]); peerCircle.setRadius(accuracy_m || 10); }
                 } else {
                   peerMarker = L.circleMarker([lat, lon], {
-                    radius: 9, color: '#22C55E', fillColor: '#22C55E', fillOpacity: 1, weight: 2
-                  }).bindTooltip(peer, { permanent: false }).addTo(map);
-                  peerLabel = L.marker([lat, lon], { icon: makeLabel(peer, '#22C55E'), interactive: false }).addTo(map);
-                  peerCircle = L.circle([lat, lon], { radius: accuracy_m || 10, color: '#22C55E', fillColor: '#22C55E', fillOpacity: 0.08, weight: 1 }).addTo(map);
+                    radius: 10, color: '${colors.peerMarker}', fillColor: '${colors.peerMarker}', fillOpacity: 1, weight: 2.5
+                  }).addTo(map);
+                  peerLabel = L.marker([lat, lon], { icon: makeLabel(peer, '${colors.peerMarker}'), interactive: false }).addTo(map);
+                  peerCircle = L.circle([lat, lon], { radius: accuracy_m || 10, color: '${colors.peerMarker}', fillColor: '${colors.peerMarker}', fillOpacity: 0.08, weight: 1 }).addTo(map);
                 }
                 if (peerLabel) peerLabel.setLatLng([lat, lon]);
               }
 
-              // Draw / update route polyline
               if (routeCoords && routeCoords.length > 1) {
                 if (routeLine) routeLine.setLatLngs(routeCoords);
-                else routeLine = L.polyline(routeCoords, { color: '#007AFF', weight: 4, opacity: 0.75, dashArray: '8 4' }).addTo(map);
-              } else if (routeLine) {
-                routeLine.remove(); routeLine = null;
-              }
+                else routeLine = L.polyline(routeCoords, { color: '${colors.routeLine}', weight: 3.5, opacity: 0.7, dashArray: '10 6' }).addTo(map);
+              } else if (routeLine) { routeLine.remove(); routeLine = null; }
 
               // Fit both markers on first load
               if (firstFit && myLocation && peerLocation) {
@@ -610,105 +611,92 @@ const ActiveSessionScreen = ({ route, navigation }) => {
 
   if (isLoading) {
     return (
-      <View style={styles.center}>
-        <ActivityIndicator size="large" color="#007AFF" />
-        <Text style={styles.loadingText}>Initializing session...</Text>
+      <View style={s.center}>
+        <ActivityIndicator size="large" color={colors.textSecondary} />
+        <Text style={s.loadingText}>Initializing session...</Text>
       </View>
     );
   }
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={s.container}>
       {/* Leaflet Map via WebView */}
       <WebView
         ref={webViewRef}
-        style={styles.map}
+        style={s.map}
         source={{ html: getMapHTML() }}
         javaScriptEnabled={true}
         domStorageEnabled={true}
         startInLoadingState={true}
         onLoadEnd={handleWebViewLoadEnd}
         renderLoading={() => (
-          <View style={styles.mapLoading}>
-            <ActivityIndicator size="large" color="#007AFF" />
+          <View style={s.mapLoading}>
+            <ActivityIndicator size="large" color={colors.textSecondary} />
           </View>
         )}
       />
 
       {/* Status Badge */}
-      <View
-        style={[
-          styles.statusBadge,
-          wsStatus === 'connected' && styles.statusConnected,
-          wsStatus === 'reconnecting' && styles.statusReconnecting,
-          wsStatus === 'failed' && styles.statusFailed,
-          wsStatus === 'disconnected' && styles.statusDisconnected,
-        ]}
-      >
-        <View
-          style={[
-            styles.statusDot,
-            wsStatus === 'connected' && styles.dotGreen,
-            wsStatus === 'reconnecting' && styles.dotOrange,
-            wsStatus === 'failed' && styles.dotRed,
-            wsStatus === 'disconnected' && styles.dotGray,
-          ]}
-        />
-        <Text style={styles.statusText}>
-          {wsStatus === 'connected'
-            ? 'Connected'
-            : wsStatus === 'reconnecting'
-              ? `Reconnecting... ${reconnectCountdown}s`
-              : wsStatus === 'failed'
-                ? 'Connection Failed'
-                : 'Disconnected'}
+      <View style={[
+        s.statusBadge,
+        wsStatus === 'connected' && s.statusConnected,
+        wsStatus === 'reconnecting' && s.statusReconnecting,
+        wsStatus === 'failed' && s.statusFailed,
+        wsStatus === 'disconnected' && s.statusDisconnected,
+      ]}>
+        <View style={[
+          s.statusDot,
+          wsStatus === 'connected' && s.dotGreen,
+          wsStatus === 'reconnecting' && s.dotOrange,
+          wsStatus === 'failed' && s.dotRed,
+          wsStatus === 'disconnected' && s.dotGray,
+        ]} />
+        <Text style={s.statusText}>
+          {wsStatus === 'connected' ? 'Live'
+            : wsStatus === 'reconnecting' ? `Reconnecting ${reconnectCountdown}s`
+              : wsStatus === 'failed' ? 'Disconnected'
+                : 'Offline'}
         </Text>
       </View>
 
       {/* Error Banner */}
       {(locationError || wsError) && (
-        <View style={styles.errorBanner}>
-          <Text style={styles.errorText}>
-            {locationError || wsError}
-          </Text>
+        <View style={s.errorBanner}>
+          <Text style={s.errorText}>{locationError || wsError}</Text>
         </View>
       )}
 
       {/* Bottom Panel */}
-      <View style={styles.bottomPanel}>
-        {/* Peer info + distance */}
-        <View style={styles.infoRow}>
-          <View style={styles.peerInfo}>
-            <Text style={styles.peerName}>{peerName}</Text>
-            <Text style={styles.peerSub}>
+      <View style={s.bottomPanel}>
+        <View style={s.infoRow}>
+          <View style={s.peerInfo}>
+            <Text style={s.peerName}>{peerName}</Text>
+            <Text style={s.peerSub}>
               {peerLocation ? `Last seen: ${peerLastSeenText}` : 'Waiting for location...'}
             </Text>
           </View>
           {routeDistance != null && (
-            <View style={styles.distanceBadge}>
-              <Text style={styles.distanceValue}>{formatDistance(routeDistance)}</Text>
+            <View style={s.distanceBadge}>
+              <Text style={s.distanceValue}>{formatDistance(routeDistance)}</Text>
               {routeDuration != null && (
-                <Text style={styles.etaValue}>{formatDuration(routeDuration)} away</Text>
+                <Text style={s.etaValue}>{formatDuration(routeDuration)} away</Text>
               )}
             </View>
           )}
         </View>
 
-        {/* Transport mode tabs */}
         {peerLocation && (
-          <View style={styles.modeTabs}>
+          <View style={s.modeTabs}>
             {Object.values(TransportMode).map(mode => (
-              <TouchableOpacity
-                key={mode.id}
-                style={[styles.modeTab, selectedMode === mode.id && styles.modeTabActive]}
-                onPress={() => setSelectedMode(mode.id)}
-              >
-                <Text style={styles.modeIcon}>{mode.icon}</Text>
-                <Text style={[styles.modeLabel, selectedMode === mode.id && styles.modeLabelActive]}>
+              <TouchableOpacity key={mode.id}
+                style={[s.modeTab, selectedMode === mode.id && s.modeTabActive]}
+                onPress={() => setSelectedMode(mode.id)}>
+                <Text style={s.modeIcon}>{mode.icon}</Text>
+                <Text style={[s.modeLabel, selectedMode === mode.id && s.modeLabelActive]}>
                   {mode.label}
                 </Text>
                 {routeLoading && selectedMode === mode.id && (
-                  <ActivityIndicator size="small" color="#007AFF" style={{ marginLeft: 4 }} />
+                  <ActivityIndicator size="small" color={colors.textSecondary} style={{ marginLeft: 4 }} />
                 )}
               </TouchableOpacity>
             ))}
@@ -716,159 +704,84 @@ const ActiveSessionScreen = ({ route, navigation }) => {
         )}
 
         <TouchableOpacity
-          style={[styles.endSessionButton, isStopping && styles.buttonDisabled]}
-          onPress={handleEndSession}
-          disabled={isStopping}
-        >
-          <Text style={styles.endSessionText}>
-            {isStopping ? 'Ending...' : 'End Session'}
-          </Text>
+          style={[s.endSessionButton, isStopping && s.buttonDisabled]}
+          onPress={handleEndSession} disabled={isStopping}>
+          <Text style={s.endSessionText}>{isStopping ? 'Ending...' : 'End Session'}</Text>
         </TouchableOpacity>
       </View>
     </SafeAreaView>
   );
 };
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#fff',
-  },
-  center: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  loadingText: {
-    marginTop: 12,
-    fontSize: 16,
-    color: '#666',
-  },
-  map: {
-    flex: 1,
-  },
+const makeStyles = (c) => StyleSheet.create({
+  container: { flex: 1, backgroundColor: c.bg },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: c.bg },
+  loadingText: { marginTop: 12, ...Font.body, color: c.textSecondary },
+  map: { flex: 1 },
+
   statusBadge: {
-    position: 'absolute',
-    top: 16,
-    left: 16,
-    right: 16,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderRadius: 8,
-    flexDirection: 'row',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.15,
-    shadowRadius: 4,
-    elevation: 5,
-    maxWidth: '90%',
+    position: 'absolute', top: 16, left: 16,
+    paddingHorizontal: 12, paddingVertical: 8,
+    borderRadius: 20, flexDirection: 'row', alignItems: 'center',
+    backgroundColor: c.cardBg, borderWidth: 1, borderColor: c.border,
   },
-  statusConnected: {
-    backgroundColor: '#E8F5E9',
-  },
-  statusReconnecting: {
-    backgroundColor: '#FFF3E0',
-  },
-  statusFailed: {
-    backgroundColor: '#FFEBEE',
-  },
-  statusDisconnected: {
-    backgroundColor: '#F5F5F5',
-  },
-  statusDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    marginRight: 10,
-  },
-  dotGreen: {
-    backgroundColor: '#34C759',
-  },
-  dotOrange: {
-    backgroundColor: '#FF9500',
-  },
-  dotRed: {
-    backgroundColor: '#FF3B30',
-  },
-  dotGray: {
-    backgroundColor: '#999',
-  },
-  statusText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#333',
-    flex: 1,
-  },
+  statusConnected: {},
+  statusReconnecting: { borderColor: c.warning },
+  statusFailed: { borderColor: c.accent },
+  statusDisconnected: {},
+  statusDot: { width: 7, height: 7, borderRadius: 4, marginRight: 7 },
+  dotGreen: { backgroundColor: c.online },
+  dotOrange: { backgroundColor: c.warning },
+  dotRed: { backgroundColor: c.accent },
+  dotGray: { backgroundColor: c.textMuted },
+  statusText: { fontSize: 12, fontWeight: '600', color: c.textPrimary },
+
   errorBanner: {
-    position: 'absolute',
-    bottom: 140,
-    left: 16,
-    right: 16,
-    backgroundColor: '#FFEBEE',
-    padding: 12,
-    borderRadius: 8,
-    borderColor: '#FF3B30',
-    borderWidth: 1,
+    position: 'absolute', bottom: 130, left: 16, right: 16,
+    backgroundColor: c.accentBg, padding: 12, borderRadius: Radius.sm,
+    borderColor: c.accent, borderWidth: 1,
   },
-  errorText: {
-    color: '#FF3B30',
-    fontSize: 13,
-    fontWeight: '500',
-  },
+  errorText: { color: c.accentLight, fontSize: 13, fontWeight: '500' },
+
   bottomPanel: {
-    backgroundColor: '#fff',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    paddingHorizontal: 16,
-    paddingTop: 16,
-    paddingBottom: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: -3 },
-    shadowOpacity: 0.08,
-    shadowRadius: 6,
-    elevation: 8,
+    backgroundColor: c.surface,
+    borderTopLeftRadius: Radius.xl, borderTopRightRadius: Radius.xl,
+    paddingHorizontal: Spacing.lg, paddingTop: Spacing.md, paddingBottom: Spacing.lg,
+    borderTopWidth: 1, borderColor: c.border,
   },
-  infoRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
+  infoRow: { flexDirection: 'row', alignItems: 'center', marginBottom: Spacing.md },
   peerInfo: { flex: 1 },
-  peerName: { fontSize: 17, fontWeight: '700', color: '#333' },
-  peerSub: { fontSize: 12, color: '#888', marginTop: 2 },
+  peerName: { ...Font.subtitle, color: c.textPrimary },
+  peerSub: { ...Font.caption, color: c.textMuted, marginTop: 3 },
   distanceBadge: { alignItems: 'flex-end' },
-  distanceValue: { fontSize: 20, fontWeight: '800', color: '#007AFF' },
-  etaValue: { fontSize: 11, color: '#888', marginTop: 1 },
+  distanceValue: { fontSize: 22, fontWeight: '800', color: c.textPrimary, letterSpacing: -0.5 },
+  etaValue: { ...Font.caption, color: c.textMuted, marginTop: 2 },
+
   modeTabs: {
-    flexDirection: 'row', marginBottom: 12,
-    backgroundColor: '#f0f0f0', borderRadius: 10, padding: 2,
+    flexDirection: 'row', marginBottom: Spacing.md,
+    backgroundColor: c.surfaceElevated, borderRadius: Radius.md, padding: 3,
+    borderWidth: 1, borderColor: c.border,
   },
   modeTab: {
-    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    paddingVertical: 7, borderRadius: 8,
+    flex: 1, flexDirection: 'row', alignItems: 'center',
+    justifyContent: 'center', paddingVertical: 8, borderRadius: Radius.sm,
   },
-  modeTabActive: { backgroundColor: '#fff', shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 3, elevation: 2 },
-  modeIcon: { fontSize: 14, marginRight: 4 },
-  modeLabel: { fontSize: 12, color: '#888' },
-  modeLabelActive: { color: '#007AFF', fontWeight: '700' },
+  modeTabActive: { backgroundColor: c.borderLight },
+  modeIcon: { fontSize: 14, marginRight: 5 },
+  modeLabel: { ...Font.caption, color: c.textMuted },
+  modeLabelActive: { color: c.textPrimary, fontWeight: '700' },
+
   mapLoading: {
-    ...StyleSheet.absoluteFillObject,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#f0f0f0',
+    ...StyleSheet.absoluteFillObject, justifyContent: 'center',
+    alignItems: 'center', backgroundColor: c.bg,
   },
   endSessionButton: {
-    backgroundColor: '#FF3B30',
-    paddingVertical: 14,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
+    borderWidth: 1, borderColor: c.accent,
+    borderRadius: Radius.md, paddingVertical: 14,
+    alignItems: 'center', justifyContent: 'center',
   },
-  buttonDisabled: {
-    opacity: 0.6,
-  },
-  endSessionText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '700',
-  },
+  buttonDisabled: { opacity: 0.5 },
+  endSessionText: { color: c.accent, fontSize: 15, fontWeight: '700', letterSpacing: 0.3 },
 });
 
 export default ActiveSessionScreen;

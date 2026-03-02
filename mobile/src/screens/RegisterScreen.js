@@ -1,177 +1,98 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
-    View,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    StyleSheet,
-    Alert,
-    ActivityIndicator,
-    KeyboardAvoidingView,
-    Platform,
-    ScrollView,
+    View, Text, TextInput, TouchableOpacity, StyleSheet,
+    Alert, ActivityIndicator, KeyboardAvoidingView, Platform,
+    ScrollView, Animated,
 } from 'react-native';
 import { useAuth } from '../context/AuthContext';
 import client from '../api/client';
+import { useTheme, Spacing, Radius, Font, anim } from '../theme';
 
 const RegisterScreen = ({ navigation }) => {
-    const [displayName, setDisplayName] = useState('');
+    const { colors } = useTheme();
+    const [name, setName] = useState('');
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
-    const [confirmPassword, setConfirmPassword] = useState('');
+    const [confirm, setConfirm] = useState('');
+    const [focused, setFocused] = useState(null);
     const { signUpWithEmail, loading } = useAuth();
 
-    const handleRegister = async () => {
-        if (!displayName.trim() || !email.trim() || !password || !confirmPassword) {
-            Alert.alert('Error', 'Please fill in all fields');
-            return;
-        }
-        if (password !== confirmPassword) {
-            Alert.alert('Error', 'Passwords do not match');
-            return;
-        }
-        if (password.length < 6) {
-            Alert.alert('Error', 'Password must be at least 6 characters');
-            return;
-        }
-        if (displayName.trim().length < 2) {
-            Alert.alert('Error', 'Display name must be at least 2 characters');
-            return;
-        }
+    const cardY = useRef(new Animated.Value(40)).current;
+    const cardOpacity = useRef(new Animated.Value(0)).current;
+    const btnScale = useRef(new Animated.Value(1)).current;
 
+    useEffect(() => {
+        Animated.parallel([
+            Animated.spring(cardY, { toValue: 0, useNativeDriver: true, tension: 80 }),
+            Animated.timing(cardOpacity, { toValue: 1, duration: 400, useNativeDriver: true }),
+        ]).start();
+    }, []);
+
+    const handleRegister = async () => {
+        if (!name.trim() || !email.trim() || !password || !confirm) { Alert.alert('Missing fields', 'Fill in all fields'); return; }
+        if (password !== confirm) { Alert.alert('Error', 'Passwords do not match'); return; }
+        if (password.length < 6) { Alert.alert('Error', 'Password must be at least 6 characters'); return; }
         try {
             await signUpWithEmail(email.trim(), password);
-            // Profile will be saved after email confirmation when user first logs in
-            // Store name locally so LoginScreen can save it after auth
-            Alert.alert(
-                'Account Created!',
-                'Please check your email for a confirmation link, then sign in.',
-                [{ text: 'OK', onPress: () => navigation.navigate('Login', { pendingName: displayName.trim() }) }]
-            );
-        } catch (error) {
-            Alert.alert('Registration Error', error.message);
-        }
+            Alert.alert('✓ Account Created', 'Check your email for a confirmation link, then sign in.',
+                [{ text: 'Sign In', onPress: () => navigation.navigate('Login', { pendingName: name.trim() }) }]);
+        } catch (e) { Alert.alert('Registration failed', e.message); }
     };
 
+    const Field = ({ label, ...props }) => (
+        <View style={{ marginBottom: Spacing.md }}>
+            <Text style={[Font.label, { color: colors.textMuted, marginBottom: 6 }]}>{label}</Text>
+            <TextInput
+                style={{
+                    backgroundColor: colors.inputBg, borderWidth: 1,
+                    borderColor: focused === label ? colors.textMuted : colors.border,
+                    borderRadius: Radius.md, padding: 14, color: colors.textPrimary, fontSize: 15,
+                }}
+                placeholderTextColor={colors.textMuted}
+                onFocus={() => setFocused(label)} onBlur={() => setFocused(null)} {...props}
+            />
+        </View>
+    );
+
     return (
-        <KeyboardAvoidingView
-            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-            style={styles.container}
-        >
-            <ScrollView contentContainerStyle={styles.scrollContent}>
-                <View style={styles.header}>
-                    <Text style={styles.title}>Create Account</Text>
-                    <Text style={styles.subtitle}>Join MeetUp today</Text>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1, backgroundColor: colors.bg }}>
+            <ScrollView contentContainerStyle={{ flexGrow: 1, padding: Spacing.lg, justifyContent: 'center' }} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+
+                <View style={{ alignItems: 'center', marginBottom: Spacing.xl }}>
+                    <TouchableOpacity style={{ alignSelf: 'flex-start', marginBottom: Spacing.md }} onPress={() => navigation.goBack()}>
+                        <Text style={{ color: colors.textSecondary, fontSize: 28 }}>‹</Text>
+                    </TouchableOpacity>
+                    <View style={{ width: 56, height: 56, borderRadius: 18, backgroundColor: colors.surface, borderWidth: 1.5, borderColor: colors.border, justifyContent: 'center', alignItems: 'center', marginBottom: Spacing.md }}>
+                        <View style={{ width: 16, height: 16, borderRadius: 8, backgroundColor: colors.accent }} />
+                    </View>
+                    <Text style={[Font.title, { color: colors.textPrimary }]}>Create account</Text>
+                    <Text style={[Font.body, { color: colors.textSecondary, marginTop: 4 }]}>Join MeetUp today</Text>
                 </View>
 
-                <View style={styles.form}>
-                    <View style={styles.inputContainer}>
-                        <Text style={styles.label}>Your Name</Text>
-                        <TextInput
-                            style={styles.input}
-                            placeholder="How should friends find you?"
-                            value={displayName}
-                            onChangeText={setDisplayName}
-                            autoCapitalize="words"
-                        />
-                    </View>
-
-                    <View style={styles.inputContainer}>
-                        <Text style={styles.label}>Email Address</Text>
-                        <TextInput
-                            style={styles.input}
-                            placeholder="Enter your email"
-                            value={email}
-                            onChangeText={setEmail}
-                            keyboardType="email-address"
-                            autoCapitalize="none"
-                        />
-                    </View>
-
-                    <View style={styles.inputContainer}>
-                        <Text style={styles.label}>Password</Text>
-                        <TextInput
-                            style={styles.input}
-                            placeholder="Create a password"
-                            value={password}
-                            onChangeText={setPassword}
-                            secureTextEntry
-                        />
-                    </View>
-
-                    <View style={styles.inputContainer}>
-                        <Text style={styles.label}>Confirm Password</Text>
-                        <TextInput
-                            style={styles.input}
-                            placeholder="Confirm your password"
-                            value={confirmPassword}
-                            onChangeText={setConfirmPassword}
-                            secureTextEntry
-                        />
-                    </View>
-
-                    <TouchableOpacity
-                        style={styles.button}
-                        onPress={handleRegister}
-                        disabled={loading}
-                    >
-                        {loading ? (
-                            <ActivityIndicator color="#fff" />
-                        ) : (
-                            <Text style={styles.buttonText}>Sign Up</Text>
-                        )}
-                    </TouchableOpacity>
-
-                    <View style={styles.footer}>
-                        <Text style={styles.footerText}>Already have an account? </Text>
-                        <TouchableOpacity onPress={() => navigation.navigate('Login')}>
-                            <Text style={styles.link}>Sign In</Text>
+                <Animated.View style={{ backgroundColor: colors.surface, borderRadius: Radius.xl, padding: Spacing.lg, borderWidth: 1, borderColor: colors.border, opacity: cardOpacity, transform: [{ translateY: cardY }] }}>
+                    <Field label="YOUR NAME" value={name} onChangeText={setName} placeholder="How should we call you?" autoCapitalize="words" />
+                    <Field label="EMAIL" value={email} onChangeText={setEmail} placeholder="you@example.com" keyboardType="email-address" autoCapitalize="none" />
+                    <Field label="PASSWORD" value={password} onChangeText={setPassword} placeholder="Min. 6 characters" secureTextEntry />
+                    <Field label="CONFIRM" value={confirm} onChangeText={setConfirm} placeholder="Repeat password" secureTextEntry />
+                    <Animated.View style={{ transform: [{ scale: btnScale }] }}>
+                        <TouchableOpacity
+                            style={{ backgroundColor: colors.textPrimary, borderRadius: Radius.md, paddingVertical: 15, alignItems: 'center', marginTop: Spacing.sm }}
+                            onPressIn={() => anim.pressIn(btnScale)} onPressOut={() => anim.pressOut(btnScale)}
+                            onPress={handleRegister} disabled={loading}>
+                            {loading ? <ActivityIndicator color={colors.bg} /> : <Text style={{ color: colors.bg, fontSize: 15, fontWeight: '700' }}>Create Account</Text>}
                         </TouchableOpacity>
-                    </View>
+                    </Animated.View>
+                </Animated.View>
+
+                <View style={{ flexDirection: 'row', justifyContent: 'center', marginTop: Spacing.xl }}>
+                    <Text style={[Font.body, { color: colors.textSecondary }]}>Already have an account? </Text>
+                    <TouchableOpacity onPress={() => navigation.navigate('Login')}>
+                        <Text style={[Font.body, { color: colors.textPrimary, fontWeight: '700' }]}>Sign in</Text>
+                    </TouchableOpacity>
                 </View>
             </ScrollView>
         </KeyboardAvoidingView>
     );
 };
-
-const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: '#fff' },
-    scrollContent: { flexGrow: 1, padding: 24, justifyContent: 'center' },
-    header: { marginBottom: 40, alignItems: 'center' },
-    title: { fontSize: 32, fontWeight: 'bold', color: '#1a1a1a', marginBottom: 8 },
-    subtitle: { fontSize: 16, color: '#666' },
-    form: { width: '100%' },
-    inputContainer: { marginBottom: 20 },
-    label: { fontSize: 14, fontWeight: '600', color: '#333', marginBottom: 8, marginLeft: 4 },
-    input: {
-        width: '100%',
-        height: 56,
-        backgroundColor: '#f5f5f5',
-        borderRadius: 12,
-        paddingHorizontal: 16,
-        fontSize: 16,
-        color: '#1a1a1a',
-        borderWidth: 1,
-        borderColor: '#eee',
-    },
-    button: {
-        width: '100%',
-        height: 56,
-        backgroundColor: '#007AFF',
-        borderRadius: 12,
-        justifyContent: 'center',
-        alignItems: 'center',
-        marginTop: 20,
-        shadowColor: '#007AFF',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.2,
-        shadowRadius: 8,
-        elevation: 4,
-    },
-    buttonText: { fontSize: 18, fontWeight: 'bold', color: '#fff' },
-    footer: { flexDirection: 'row', justifyContent: 'center', marginTop: 32 },
-    footerText: { fontSize: 14, color: '#666' },
-    link: { fontSize: 14, fontWeight: 'bold', color: '#007AFF' },
-});
 
 export default RegisterScreen;

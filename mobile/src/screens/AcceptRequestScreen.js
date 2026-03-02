@@ -1,201 +1,139 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
-    View,
-    Text,
-    FlatList,
-    TouchableOpacity,
-    StyleSheet,
-    Alert,
-    ActivityIndicator,
-    RefreshControl,
+    View, Text, FlatList, TouchableOpacity,
+    Alert, ActivityIndicator, RefreshControl, Animated,
 } from 'react-native';
 import client from '../api/client';
+import { useTheme, Spacing, Radius, Font, anim } from '../theme';
 
 const AcceptRequestScreen = ({ navigation }) => {
+    const { colors } = useTheme();
     const [requests, setRequests] = useState([]);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [acceptingId, setAcceptingId] = useState(null);
-    const pollIntervalRef = useRef(null);
+    const pollRef = useRef(null);
 
     const fetchRequests = useCallback(async (silent = false) => {
         if (!silent) setLoading(true);
-        try {
-            const response = await client.get('/requests/pending');
-            setRequests(response.data || []);
-        } catch (error) {
-            if (!silent) {
-                Alert.alert('Error', 'Could not load requests. Make sure you are signed in and the backend is running.');
-            }
-            console.error('Fetch requests error:', error);
-        } finally {
-            setLoading(false);
-            setRefreshing(false);
-        }
+        try { const res = await client.get('/requests/pending'); setRequests(res.data || []); }
+        catch (err) { if (!silent) Alert.alert('Error', 'Could not load requests.'); }
+        finally { setLoading(false); setRefreshing(false); }
     }, []);
 
-    // Initial load + poll every 5 seconds
     useEffect(() => {
         fetchRequests();
-        pollIntervalRef.current = setInterval(() => {
-            fetchRequests(true); // silent refresh
-        }, 5000);
-        return () => {
-            if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
-        };
+        pollRef.current = setInterval(() => fetchRequests(true), 5000);
+        return () => clearInterval(pollRef.current);
     }, [fetchRequests]);
 
-    const handleAccept = async (request) => {
-        setAcceptingId(request.id);
+    const handleAccept = async (req) => {
+        setAcceptingId(req.id);
         try {
-            const response = await client.post(`/requests/${request.id}/accept`);
-            const { session_id, peer_name, peer_id } = response.data;
-
-            // Stop polling — we're entering the session
-            if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
-
-            navigation.navigate('ActiveSession', {
-                sessionId: session_id,
-                friend: {
-                    id: peer_id,
-                    name: peer_name,
-                },
-            });
-        } catch (error) {
-            console.error('Accept error:', error);
-            Alert.alert('Error', error.response?.data?.detail || 'Failed to accept request. Try again.');
-        } finally {
-            setAcceptingId(null);
-        }
+            const res = await client.post(`/requests/${req.id}/accept`);
+            const { session_id, peer_name, peer_id } = res.data;
+            clearInterval(pollRef.current);
+            navigation.navigate('ActiveSession', { sessionId: session_id, friend: { id: peer_id, display_name: peer_name, name: peer_name } });
+        } catch (err) {
+            Alert.alert('Error', err.response?.status === 410 ? 'Request expired.' : 'Failed to accept.');
+        } finally { setAcceptingId(null); }
     };
 
-    const handleDecline = (requestId) => {
-        // Optimistically remove from list (no backend endpoint for decline yet)
-        setRequests(prev => prev.filter(r => r.id !== requestId));
+    const handleDecline = async (req) => {
+        try { await client.post(`/requests/${req.id}/decline`); setRequests(prev => prev.filter(r => r.id !== req.id)); }
+        catch { Alert.alert('Error', 'Could not decline.'); }
     };
-
-    const renderItem = ({ item }) => (
-        <View style={styles.card}>
-            <View style={styles.infoContainer}>
-                <Text style={styles.name}>{item.requester_name}</Text>
-                <Text style={styles.email}>{item.requester_email}</Text>
-                <Text style={styles.time}>Wants to meet up with you</Text>
-            </View>
-            <View style={styles.actions}>
-                <TouchableOpacity
-                    style={[styles.button, styles.acceptButton]}
-                    onPress={() => handleAccept(item)}
-                    disabled={acceptingId === item.id}
-                >
-                    {acceptingId === item.id ? (
-                        <ActivityIndicator size="small" color="#fff" />
-                    ) : (
-                        <Text style={styles.buttonText}>Accept</Text>
-                    )}
-                </TouchableOpacity>
-                <TouchableOpacity
-                    style={[styles.button, styles.declineButton]}
-                    onPress={() => handleDecline(item.id)}
-                    disabled={acceptingId === item.id}
-                >
-                    <Text style={styles.buttonText}>Decline</Text>
-                </TouchableOpacity>
-            </View>
-        </View>
-    );
 
     if (loading) {
         return (
-            <View style={styles.center}>
-                <ActivityIndicator size="large" color="#007AFF" />
-                <Text style={styles.loadingText}>Looking for requests...</Text>
+            <View style={{ flex: 1, backgroundColor: colors.bg, justifyContent: 'center', alignItems: 'center' }}>
+                <ActivityIndicator size="large" color={colors.textSecondary} />
+                <Text style={[Font.body, { color: colors.textSecondary, marginTop: Spacing.md }]}>Loading requests...</Text>
             </View>
         );
     }
 
     return (
-        <View style={styles.container}>
+        <View style={{ flex: 1, backgroundColor: colors.bg, padding: Spacing.lg }}>
+            <View style={{ marginBottom: Spacing.lg, paddingTop: Spacing.md }}>
+                <Text style={[Font.title, { color: colors.textPrimary }]}>Incoming Requests</Text>
+                <Text style={[Font.body, { color: colors.textSecondary, marginTop: 4 }]}>
+                    {requests.length > 0 ? `${requests.length} pending` : 'No pending requests'}
+                </Text>
+            </View>
+
             {requests.length === 0 ? (
-                <View style={styles.emptyContainer}>
-                    <Text style={styles.emptyIcon}>📭</Text>
-                    <Text style={styles.emptyTitle}>No Incoming Requests</Text>
-                    <Text style={styles.emptySubtext}>
-                        When someone sends you a meet request, it will appear here automatically.
-                    </Text>
-                    <TouchableOpacity style={styles.refreshButton} onPress={() => fetchRequests()}>
-                        <Text style={styles.refreshButtonText}>Refresh</Text>
-                    </TouchableOpacity>
+                <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingBottom: 80 }}>
+                    <Text style={{ fontSize: 52, color: colors.textMuted, marginBottom: Spacing.md }}>◎</Text>
+                    <Text style={[Font.subtitle, { color: colors.textPrimary, marginBottom: 6 }]}>All clear</Text>
+                    <Text style={[Font.body, { color: colors.textSecondary }]}>No pending requests</Text>
                 </View>
             ) : (
-                <FlatList
-                    data={requests}
-                    keyExtractor={(item) => item.id}
-                    renderItem={renderItem}
-                    contentContainerStyle={styles.listContainer}
-                    refreshControl={
-                        <RefreshControl
-                            refreshing={refreshing}
-                            onRefresh={() => { setRefreshing(true); fetchRequests(); }}
-                        />
-                    }
-                    ListHeaderComponent={
-                        <Text style={styles.listHeader}>
-                            Auto-refreshing every 5s • {requests.length} request{requests.length !== 1 ? 's' : ''}
-                        </Text>
-                    }
-                />
+                <FlatList data={requests} keyExtractor={item => item.id} showsVerticalScrollIndicator={false}
+                    contentContainerStyle={{ paddingBottom: Spacing.xxl }}
+                    refreshControl={<RefreshControl refreshing={refreshing} tintColor={colors.textMuted} onRefresh={() => { setRefreshing(true); fetchRequests(true); }} />}
+                    renderItem={({ item, index }) => (
+                        <RequestCard item={item} index={index} colors={colors} accepting={acceptingId === item.id}
+                            onAccept={() => handleAccept(item)} onDecline={() => handleDecline(item)} />
+                    )} />
             )}
         </View>
     );
 };
 
-const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: '#f5f5f5' },
-    center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-    loadingText: { marginTop: 12, color: '#666', fontSize: 15 },
-    listContainer: { padding: 16 },
-    listHeader: { fontSize: 12, color: '#999', marginBottom: 12, textAlign: 'center' },
-    emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 32 },
-    emptyIcon: { fontSize: 48, marginBottom: 16 },
-    emptyTitle: { fontSize: 20, fontWeight: '700', color: '#333', marginBottom: 8 },
-    emptySubtext: { fontSize: 14, color: '#999', textAlign: 'center', lineHeight: 20, marginBottom: 24 },
-    refreshButton: {
-        paddingHorizontal: 24,
-        paddingVertical: 12,
-        backgroundColor: '#007AFF',
-        borderRadius: 8,
-    },
-    refreshButtonText: { color: '#fff', fontWeight: '600' },
-    card: {
-        backgroundColor: '#fff',
-        padding: 16,
-        borderRadius: 12,
-        marginBottom: 12,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.1,
-        shadowRadius: 4,
-        elevation: 3,
-    },
-    infoContainer: { flex: 1, marginRight: 10 },
-    name: { fontSize: 16, fontWeight: 'bold', color: '#333', marginBottom: 2 },
-    email: { fontSize: 13, color: '#666', marginBottom: 2 },
-    time: { fontSize: 12, color: '#007AFF', fontStyle: 'italic' },
-    actions: { flexDirection: 'row' },
-    button: {
-        paddingVertical: 8,
-        paddingHorizontal: 12,
-        borderRadius: 6,
-        marginLeft: 8,
-        minWidth: 70,
-        alignItems: 'center',
-    },
-    acceptButton: { backgroundColor: '#34C759' },
-    declineButton: { backgroundColor: '#FF3B30' },
-    buttonText: { color: '#fff', fontWeight: '600', fontSize: 13 },
-});
+const RequestCard = ({ item, index, colors, accepting, onAccept, onDecline }) => {
+    const opacity = useRef(new Animated.Value(0)).current;
+    const translateY = useRef(new Animated.Value(24)).current;
+
+    useEffect(() => {
+        Animated.parallel([
+            Animated.timing(opacity, { toValue: 1, duration: 300, delay: index * 60, useNativeDriver: true }),
+            Animated.spring(translateY, { toValue: 0, delay: index * 60, useNativeDriver: true, tension: 80 }),
+        ]).start();
+    }, []);
+
+    const initials = (item.requester_name || '?')[0].toUpperCase();
+
+    return (
+        <Animated.View style={{ opacity, transform: [{ translateY }], backgroundColor: colors.surface, borderRadius: Radius.lg, padding: Spacing.md, marginBottom: Spacing.sm, borderWidth: 1, borderColor: colors.border }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: Spacing.md }}>
+                <View style={{ width: 46, height: 46, borderRadius: 23, backgroundColor: colors.surfaceElevated, borderWidth: 1, borderColor: colors.border, justifyContent: 'center', alignItems: 'center', marginRight: 12 }}>
+                    <Text style={{ color: colors.textPrimary, fontWeight: '700', fontSize: 18 }}>{initials}</Text>
+                </View>
+                <View style={{ flex: 1 }}>
+                    <Text style={[Font.subtitle, { color: colors.textPrimary, fontSize: 15 }]}>{item.requester_name}</Text>
+                    <Text style={[Font.caption, { color: colors.textMuted, marginTop: 2 }]}>{item.requester_email}</Text>
+                </View>
+                {item.expires_at && <ExpiryBadge expiresAt={item.expires_at} colors={colors} />}
+            </View>
+            <View style={{ flexDirection: 'row', gap: 8 }}>
+                <TouchableOpacity style={{ flex: 1, borderWidth: 1, borderColor: colors.border, borderRadius: Radius.md, paddingVertical: 12, alignItems: 'center' }} onPress={onDecline}>
+                    <Text style={{ color: colors.textMuted, fontWeight: '600', fontSize: 14 }}>Decline</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={{ flex: 2, backgroundColor: colors.textPrimary, borderRadius: Radius.md, paddingVertical: 12, alignItems: 'center', opacity: accepting ? 0.6 : 1 }} onPress={onAccept} disabled={accepting}>
+                    {accepting ? <ActivityIndicator size="small" color={colors.bg} /> : <Text style={{ color: colors.bg, fontWeight: '700', fontSize: 14 }}>Accept</Text>}
+                </TouchableOpacity>
+            </View>
+        </Animated.View>
+    );
+};
+
+const ExpiryBadge = ({ expiresAt, colors }) => {
+    const [rem, setRem] = useState('');
+    useEffect(() => {
+        const update = () => {
+            const secs = Math.max(0, Math.floor((new Date(expiresAt).getTime() - Date.now()) / 1000));
+            setRem(`${Math.floor(secs / 60)}:${(secs % 60).toString().padStart(2, '0')}`);
+        };
+        update();
+        const t = setInterval(update, 1000);
+        return () => clearInterval(t);
+    }, [expiresAt]);
+    return (
+        <View style={{ backgroundColor: colors.surfaceElevated, borderRadius: Radius.sm, paddingHorizontal: 8, paddingVertical: 4, borderWidth: 1, borderColor: colors.border }}>
+            <Text style={{ fontWeight: '700', color: colors.textSecondary, fontSize: 13, fontVariant: ['tabular-nums'] }}>{rem}</Text>
+        </View>
+    );
+};
 
 export default AcceptRequestScreen;

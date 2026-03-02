@@ -1,361 +1,211 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
-    View,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    StyleSheet,
-    Alert,
-    ActivityIndicator,
-    KeyboardAvoidingView,
-    Platform,
-    ScrollView,
+    View, Text, TextInput, TouchableOpacity, StyleSheet,
+    Alert, ActivityIndicator, KeyboardAvoidingView, Platform,
+    ScrollView, Animated, Dimensions,
 } from 'react-native';
 import { useAuth } from '../context/AuthContext';
 import client from '../api/client';
+import { useTheme, Spacing, Radius, Font, anim } from '../theme';
+
+const { width } = Dimensions.get('window');
 
 const LoginScreen = ({ navigation, route }) => {
-    const [activeTab, setActiveTab] = useState('email'); // 'email' or 'phone'
+    const { colors } = useTheme();
+    const [activeTab, setActiveTab] = useState('email');
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [phone, setPhone] = useState('');
     const [otp, setOtp] = useState('');
     const [otpSent, setOtpSent] = useState(false);
+    const [focused, setFocused] = useState(null);
+    const { signInWithEmail, signInWithPhone, verifyPhoneOTP, loading } = useAuth();
 
-    const {
-        signInWithEmail,
-        signInWithPhone,
-        verifyPhoneOTP,
-        loading
-    } = useAuth();
+    // Entrance animations
+    const logoScale = useRef(new Animated.Value(0.7)).current;
+    const logoOpacity = useRef(new Animated.Value(0)).current;
+    const cardY = useRef(new Animated.Value(40)).current;
+    const cardOpacity = useRef(new Animated.Value(0)).current;
+    const footerOpacity = useRef(new Animated.Value(0)).current;
+    const btnScale = useRef(new Animated.Value(1)).current;
+    const tabIndicator = useRef(new Animated.Value(0)).current;
+
+    useEffect(() => {
+        Animated.sequence([
+            Animated.parallel([
+                Animated.spring(logoScale, { toValue: 1, useNativeDriver: true, tension: 60 }),
+                Animated.timing(logoOpacity, { toValue: 1, duration: 500, useNativeDriver: true }),
+            ]),
+            Animated.parallel([
+                Animated.spring(cardY, { toValue: 0, useNativeDriver: true, tension: 80, delay: 100 }),
+                Animated.timing(cardOpacity, { toValue: 1, duration: 400, useNativeDriver: true }),
+            ]),
+            Animated.timing(footerOpacity, { toValue: 1, duration: 300, useNativeDriver: true }),
+        ]).start();
+    }, []);
+
+    useEffect(() => {
+        Animated.spring(tabIndicator, {
+            toValue: activeTab === 'email' ? 0 : 1,
+            useNativeDriver: true, tension: 120, friction: 12,
+        }).start();
+    }, [activeTab]);
 
     const handleEmailLogin = async () => {
-        if (!email.trim() || !password) {
-            Alert.alert('Error', 'Please enter both email and password');
-            return;
-        }
-
+        if (!email.trim() || !password) { Alert.alert('Missing fields', 'Enter your email and password'); return; }
         try {
             const data = await signInWithEmail(email.trim(), password);
-            // Upsert user profile into Postgres (required for name search to work)
-            // The display_name will be empty until the user sets it via profile
             try {
                 const name = route?.params?.pendingName || data?.user?.user_metadata?.display_name || email.split('@')[0];
                 await client.post('/users/profile', { display_name: name });
-            } catch (profileErr) {
-                // Non-fatal: user is still logged in
-                console.warn('Profile upsert failed:', profileErr.message);
-            }
-            // Session state will automatically trigger navigation to MainStack
+            } catch (_) { }
         } catch (error) {
-            let message = error.message;
-            if (message.includes('Email not confirmed')) {
-                message = 'Please confirm your email address before signing in. Check your inbox (and spam) for a confirmation link.';
-            } else if (message.includes('Invalid login credentials')) {
-                message = 'Invalid email or password. If you just signed up, make sure you clicked the confirmation link in your email.';
-            }
-            Alert.alert('Login Error', message);
+            let msg = error.message;
+            if (msg.includes('Email not confirmed')) msg = 'Please confirm your email. Check your inbox.';
+            else if (msg.includes('Invalid login credentials')) msg = 'Incorrect email or password.';
+            Alert.alert('Sign in failed', msg);
         }
     };
 
-    const handleSendOTP = async () => {
-        if (!phone.trim()) {
-            Alert.alert('Error', 'Please enter your phone number');
-            return;
-        }
-
-        try {
-            await signInWithPhone(phone.trim());
-            setOtpSent(true);
-            Alert.alert('OTP Sent', 'Please check your phone for the verification code.');
-        } catch (error) {
-            Alert.alert('Error', error.message);
-        }
+    const handlePhoneLogin = async () => {
+        if (!phone.trim()) { Alert.alert('Missing field', 'Enter your phone number'); return; }
+        try { await signInWithPhone(phone.trim()); setOtpSent(true); }
+        catch (e) { Alert.alert('Error', e.message); }
     };
 
-    const handleVerifyOTP = async () => {
-        if (!otp.trim()) {
-            Alert.alert('Error', 'Please enter the 6-digit OTP');
-            return;
-        }
-
-        try {
-            await verifyPhoneOTP(phone.trim(), otp.trim());
-            // Auth state change will handle navigation
-        } catch (error) {
-            Alert.alert('Verification Error', error.message);
-        }
+    const handleVerifyOtp = async () => {
+        if (!otp.trim()) { Alert.alert('Missing field', 'Enter the OTP'); return; }
+        try { await verifyPhoneOTP(phone.trim(), otp.trim()); }
+        catch (e) { Alert.alert('Invalid code', e.message); }
     };
+
+    const s = makeStyles(colors);
+    const tabTranslateX = tabIndicator.interpolate({ inputRange: [0, 1], outputRange: [0, (width - Spacing.lg * 2 - Spacing.lg * 2 - 6) / 2] });
 
     return (
-        <KeyboardAvoidingView
-            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-            style={styles.container}
-        >
-            <ScrollView contentContainerStyle={styles.scrollContent}>
-                <View style={styles.header}>
-                    <Text style={styles.title}>Welcome Back</Text>
-                    <Text style={styles.subtitle}>Sign in to your account</Text>
-                </View>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={[s.root, { backgroundColor: colors.bg }]}>
+            <ScrollView contentContainerStyle={s.scroll} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
 
-                {/* Tab Switcher */}
-                <View style={styles.tabContainer}>
-                    <TouchableOpacity
-                        style={[styles.tab, activeTab === 'email' && styles.activeTab]}
-                        onPress={() => {
-                            setActiveTab('email');
-                            setOtpSent(false);
-                        }}
-                    >
-                        <Text style={[styles.tabText, activeTab === 'email' && styles.activeTabText]}>Email</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                        style={[styles.tab, activeTab === 'phone' && styles.activeTab]}
-                        onPress={() => setActiveTab('phone')}
-                    >
-                        <Text style={[styles.tabText, activeTab === 'phone' && styles.activeTabText]}>Phone</Text>
-                    </TouchableOpacity>
-                </View>
+                {/* Logo */}
+                <Animated.View style={[s.logoArea, { opacity: logoOpacity, transform: [{ scale: logoScale }] }]}>
+                    <View style={[s.logoMark, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+                        <View style={[s.logoPin, { backgroundColor: colors.accent }]} />
+                    </View>
+                    <Text style={[Font.display, { color: colors.textPrimary, letterSpacing: 1 }]}>MeetUp</Text>
+                    <Text style={[Font.body, { color: colors.textSecondary, marginTop: 6, textAlign: 'center' }]}>
+                        Find your people, right now.
+                    </Text>
+                </Animated.View>
 
-                <View style={styles.form}>
+                {/* Card */}
+                <Animated.View style={[s.card, { backgroundColor: colors.surface, borderColor: colors.border, opacity: cardOpacity, transform: [{ translateY: cardY }] }]}>
+                    <Text style={[Font.title, { color: colors.textPrimary, marginBottom: Spacing.lg }]}>Welcome back</Text>
+
+                    {/* Tab switcher */}
+                    <View style={[s.tabRow, { backgroundColor: colors.surfaceElevated }]}>
+                        <Animated.View style={[s.tabSlider, { backgroundColor: colors.borderLight, transform: [{ translateX: tabTranslateX }] }]} />
+                        {['email', 'phone'].map(tab => (
+                            <TouchableOpacity key={tab} style={s.tab} onPress={() => { setActiveTab(tab); setOtpSent(false); }}>
+                                <Text style={[Font.caption, { color: activeTab === tab ? colors.textPrimary : colors.textMuted, fontWeight: activeTab === tab ? '700' : '500' }]}>
+                                    {tab === 'email' ? 'Email' : 'Phone'}
+                                </Text>
+                            </TouchableOpacity>
+                        ))}
+                    </View>
+
                     {activeTab === 'email' ? (
                         <>
-                            <View style={styles.inputContainer}>
-                                <Text style={styles.label}>Email Address</Text>
-                                <TextInput
-                                    style={styles.input}
-                                    placeholder="Enter your email"
-                                    value={email}
-                                    onChangeText={setEmail}
-                                    keyboardType="email-address"
-                                    autoCapitalize="none"
-                                />
-                            </View>
-
-                            <View style={styles.inputContainer}>
-                                <View style={styles.labelRow}>
-                                    <Text style={styles.label}>Password</Text>
-                                    <TouchableOpacity onPress={() => navigation.navigate('ForgotPassword')}>
-                                        <Text style={styles.forgotText}>Forgot?</Text>
-                                    </TouchableOpacity>
-                                </View>
-                                <TextInput
-                                    style={styles.input}
-                                    placeholder="Enter your password"
-                                    value={password}
-                                    onChangeText={setPassword}
-                                    secureTextEntry
-                                />
-                            </View>
-
-                            <TouchableOpacity
-                                style={styles.button}
-                                onPress={handleEmailLogin}
-                                disabled={loading}
-                            >
-                                {loading ? (
-                                    <ActivityIndicator color="#fff" />
-                                ) : (
-                                    <Text style={styles.buttonText}>Sign In</Text>
-                                )}
-                            </TouchableOpacity>
+                            <Field label="EMAIL" value={email} onChangeText={setEmail} placeholder="you@example.com"
+                                keyboardType="email-address" autoCapitalize="none" colors={colors} focused={focused === 'email'}
+                                onFocus={() => setFocused('email')} onBlur={() => setFocused(null)} />
+                            <Field label="PASSWORD" value={password} onChangeText={setPassword} placeholder="••••••••"
+                                secureTextEntry colors={colors} focused={focused === 'pass'}
+                                onFocus={() => setFocused('pass')} onBlur={() => setFocused(null)}
+                                right={<TouchableOpacity onPress={() => navigation.navigate('ForgotPassword')}><Text style={[Font.caption, { color: colors.accent }]}>Forgot?</Text></TouchableOpacity>} />
+                            <AnimBtn label="Sign In" loading={loading} onPress={handleEmailLogin} colors={colors} scale={btnScale} />
+                        </>
+                    ) : !otpSent ? (
+                        <>
+                            <Field label="PHONE" value={phone} onChangeText={setPhone} placeholder="+91 98765 43210"
+                                keyboardType="phone-pad" colors={colors} focused={focused === 'phone'}
+                                onFocus={() => setFocused('phone')} onBlur={() => setFocused(null)} />
+                            <AnimBtn label="Send Code" loading={loading} onPress={handlePhoneLogin} colors={colors} scale={btnScale} />
                         </>
                     ) : (
                         <>
-                            <View style={styles.inputContainer}>
-                                <Text style={styles.label}>Phone Number</Text>
-                                <TextInput
-                                    style={styles.input}
-                                    placeholder="+1 234 567 8900"
-                                    value={phone}
-                                    onChangeText={setPhone}
-                                    keyboardType="phone-pad"
-                                    editable={!otpSent}
-                                />
-                            </View>
-
-                            {otpSent && (
-                                <View style={styles.inputContainer}>
-                                    <Text style={styles.label}>Verification Code</Text>
-                                    <TextInput
-                                        style={styles.input}
-                                        placeholder="6-digit code"
-                                        value={otp}
-                                        onChangeText={setOtp}
-                                        keyboardType="number-pad"
-                                        maxLength={6}
-                                    />
-                                </View>
-                            )}
-
-                            <TouchableOpacity
-                                style={styles.button}
-                                onPress={otpSent ? handleVerifyOTP : handleSendOTP}
-                                disabled={loading}
-                            >
-                                {loading ? (
-                                    <ActivityIndicator color="#fff" />
-                                ) : (
-                                    <Text style={styles.buttonText}>
-                                        {otpSent ? 'Verify & Sign In' : 'Send Verification Code'}
-                                    </Text>
-                                )}
-                            </TouchableOpacity>
-
-                            {otpSent && (
-                                <TouchableOpacity
-                                    style={styles.resendButton}
-                                    onPress={() => setOtpSent(false)}
-                                >
-                                    <Text style={styles.resendText}>Change Phone Number</Text>
-                                </TouchableOpacity>
-                            )}
+                            <Text style={[Font.body, { color: colors.textSecondary, textAlign: 'center', marginBottom: Spacing.md }]}>Code sent to {phone}</Text>
+                            <Field label="CODE" value={otp} onChangeText={setOtp} placeholder="000000"
+                                keyboardType="number-pad" colors={colors} focused={focused === 'otp'}
+                                onFocus={() => setFocused('otp')} onBlur={() => setFocused(null)} />
+                            <AnimBtn label="Verify & Sign In" loading={loading} onPress={handleVerifyOtp} colors={colors} scale={btnScale} />
                         </>
                     )}
+                </Animated.View>
 
-                    <View style={styles.footer}>
-                        <Text style={styles.footerText}>Don't have an account? </Text>
-                        <TouchableOpacity onPress={() => navigation.navigate('Register')}>
-                            <Text style={styles.link}>Sign Up</Text>
-                        </TouchableOpacity>
-                    </View>
-                </View>
+                <Animated.View style={[s.footer, { opacity: footerOpacity }]}>
+                    <Text style={[Font.body, { color: colors.textSecondary }]}>Don't have an account? </Text>
+                    <TouchableOpacity onPress={() => navigation.navigate('Register')}>
+                        <Text style={[Font.body, { color: colors.textPrimary, fontWeight: '700' }]}>Create one</Text>
+                    </TouchableOpacity>
+                </Animated.View>
             </ScrollView>
         </KeyboardAvoidingView>
     );
 };
 
-const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: '#fff',
+/* ---- Shared sub-components ---- */
+
+const Field = ({ label, right, focused, colors, ...props }) => (
+    <View style={{ marginBottom: Spacing.md }}>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
+            <Text style={[Font.label, { color: colors.textMuted }]}>{label}</Text>
+            {right}
+        </View>
+        <TextInput
+            style={{
+                backgroundColor: colors.inputBg, borderWidth: 1,
+                borderColor: focused ? colors.textMuted : colors.border,
+                borderRadius: Radius.md, padding: 14, color: colors.textPrimary, fontSize: 15,
+            }}
+            placeholderTextColor={colors.textMuted} {...props}
+        />
+    </View>
+);
+
+const AnimBtn = ({ label, loading: isLoading, onPress, colors, scale }) => (
+    <Animated.View style={{ transform: [{ scale }] }}>
+        <TouchableOpacity
+            style={{
+                backgroundColor: colors.textPrimary, borderRadius: Radius.md,
+                paddingVertical: 15, alignItems: 'center', marginTop: Spacing.sm,
+            }}
+            onPressIn={() => anim.pressIn(scale)} onPressOut={() => anim.pressOut(scale)}
+            onPress={onPress} disabled={isLoading}>
+            {isLoading ? <ActivityIndicator color={colors.bg} /> : <Text style={{ color: colors.bg, fontSize: 15, fontWeight: '700', letterSpacing: 0.3 }}>{label}</Text>}
+        </TouchableOpacity>
+    </Animated.View>
+);
+
+const makeStyles = (c) => StyleSheet.create({
+    root: { flex: 1 },
+    scroll: { flexGrow: 1, padding: Spacing.lg, justifyContent: 'center' },
+    logoArea: { alignItems: 'center', marginBottom: Spacing.xl },
+    logoMark: {
+        width: 64, height: 64, borderRadius: 20, borderWidth: 1.5,
+        justifyContent: 'center', alignItems: 'center', marginBottom: Spacing.md,
     },
-    scrollContent: {
-        flexGrow: 1,
-        padding: 24,
-        justifyContent: 'center',
+    logoPin: { width: 20, height: 20, borderRadius: 10 },
+    card: { borderRadius: Radius.xl, padding: Spacing.lg, borderWidth: 1 },
+    tabRow: {
+        flexDirection: 'row', borderRadius: Radius.md, padding: 3,
+        marginBottom: Spacing.lg, position: 'relative', overflow: 'hidden',
     },
-    header: {
-        marginBottom: 40,
-        alignItems: 'center',
+    tabSlider: {
+        position: 'absolute', top: 3, left: 3,
+        width: '50%', height: '100%', borderRadius: Radius.sm,
     },
-    title: {
-        fontSize: 32,
-        fontWeight: 'bold',
-        color: '#1a1a1a',
-        marginBottom: 8,
-    },
-    subtitle: {
-        fontSize: 16,
-        color: '#666',
-    },
-    tabContainer: {
-        flexDirection: 'row',
-        backgroundColor: '#f5f5f5',
-        borderRadius: 12,
-        padding: 4,
-        marginBottom: 32,
-    },
-    tab: {
-        flex: 1,
-        height: 44,
-        justifyContent: 'center',
-        alignItems: 'center',
-        borderRadius: 8,
-    },
-    activeTab: {
-        backgroundColor: '#fff',
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.1,
-        shadowRadius: 4,
-        elevation: 2,
-    },
-    tabText: {
-        fontSize: 14,
-        fontWeight: '600',
-        color: '#666',
-    },
-    activeTabText: {
-        color: '#007AFF',
-    },
-    form: {
-        width: '100%',
-    },
-    inputContainer: {
-        marginBottom: 20,
-    },
-    labelRow: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        marginBottom: 8,
-    },
-    label: {
-        fontSize: 14,
-        fontWeight: '600',
-        color: '#333',
-        marginBottom: 8,
-        marginLeft: 4,
-    },
-    forgotText: {
-        fontSize: 14,
-        color: '#007AFF',
-        fontWeight: '600',
-    },
-    input: {
-        width: '100%',
-        height: 56,
-        backgroundColor: '#f5f5f5',
-        borderRadius: 12,
-        paddingHorizontal: 16,
-        fontSize: 16,
-        color: '#1a1a1a',
-        borderWidth: 1,
-        borderColor: '#eee',
-    },
-    button: {
-        width: '100%',
-        height: 56,
-        backgroundColor: '#007AFF',
-        borderRadius: 12,
-        justifyContent: 'center',
-        alignItems: 'center',
-        marginTop: 20,
-        shadowColor: '#007AFF',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.2,
-        shadowRadius: 8,
-        elevation: 4,
-    },
-    buttonText: {
-        fontSize: 18,
-        fontWeight: 'bold',
-        color: '#fff',
-    },
-    resendButton: {
-        marginTop: 16,
-        alignItems: 'center',
-    },
-    resendText: {
-        fontSize: 14,
-        color: '#666',
-        fontWeight: '600',
-    },
-    footer: {
-        flexDirection: 'row',
-        justifyContent: 'center',
-        marginTop: 32,
-    },
-    footerText: {
-        fontSize: 14,
-        color: '#666',
-    },
-    link: {
-        fontSize: 14,
-        fontWeight: 'bold',
-        color: '#007AFF',
-    },
+    tab: { flex: 1, paddingVertical: 9, alignItems: 'center', zIndex: 1 },
+    footer: { flexDirection: 'row', justifyContent: 'center', marginTop: Spacing.xl },
 });
 
 export default LoginScreen;
