@@ -1,12 +1,16 @@
+import json
 import uuid
 from datetime import datetime, timedelta
 
 import jwt
+import redis
 
 from app.core.config import settings
 from app.core.database import SessionLocal
 from app.models.session import Session, SessionParticipant, SessionStatus
 from app.models.user import User
+
+DEMO_LOCATION_TTL_SECONDS = 3600
 
 
 def create_test_token(user_id: str) -> str:
@@ -59,7 +63,28 @@ def seed():
 
         print(f"✅ Created Active Session: {session_id}")
 
-        # 3. Generate Credentials
+        # 3. Seed initial live locations in Redis so snapshot map has peers during demo
+        redis_client = redis.Redis.from_url(settings.REDIS_URL, decode_responses=True)
+        now_iso = datetime.utcnow().isoformat()
+        alice_location = {
+            "lat": 28.5355,
+            "lon": 77.0892,
+            "accuracy_m": 12,
+            "timestamp": now_iso,
+            "updated_at": now_iso,
+        }
+        bob_location = {
+            "lat": 28.5362,
+            "lon": 77.0901,
+            "accuracy_m": 10,
+            "timestamp": now_iso,
+            "updated_at": now_iso,
+        }
+        redis_client.setex(f"loc:{session_id}:{user1_id}", DEMO_LOCATION_TTL_SECONDS, json.dumps(alice_location))
+        redis_client.setex(f"loc:{session_id}:{user2_id}", DEMO_LOCATION_TTL_SECONDS, json.dumps(bob_location))
+        print(f"✅ Seeded initial live locations for Alice and Bob (TTL: {DEMO_LOCATION_TTL_SECONDS}s)")
+
+        # 4. Generate Credentials
         # Token creation needs string usually for jwt payload
         token1 = create_test_token(str(user1_id))
         token2 = create_test_token(str(user2_id))

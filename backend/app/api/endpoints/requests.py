@@ -1,16 +1,15 @@
-import uuid as _uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import UUID
 
-from fastapi import APIRouter, Body, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.api import deps
 from app.core.database import get_db
 from app.models.meet_request import MeetRequest, RequestStatus
-from app.models.session import ParticipantStatus, SessionParticipant, SessionStatus
 from app.models.session import Session as MeetSession
+from app.models.session import SessionParticipant, SessionStatus
 from app.models.user import User
 
 router = APIRouter()
@@ -23,14 +22,14 @@ class CreateRequestBody(BaseModel):
 def _is_expired(req: MeetRequest) -> bool:
     if not req.expires_at:
         return False
-    now = datetime.now(timezone.utc)
-    exp = req.expires_at if req.expires_at.tzinfo else req.expires_at.replace(tzinfo=timezone.utc)
+    now = datetime.now(UTC)
+    exp = req.expires_at if req.expires_at.tzinfo else req.expires_at.replace(tzinfo=UTC)
     return now > exp
 
 
 def _expire_stale(db: Session):
     """Mark all expired PENDING requests as EXPIRED."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     stale = (
         db.query(MeetRequest)
         .filter(
@@ -47,11 +46,15 @@ def _expire_stale(db: Session):
 
 @router.post("/", status_code=status.HTTP_201_CREATED)
 def create_meet_request(
-    body: CreateRequestBody,
+    body: CreateRequestBody | None = None,
+    receiver_id: UUID | None = Query(default=None),
     db: Session = Depends(get_db),
     current_user: User = Depends(deps.get_current_user),
 ):
-    receiver_id = body.to_user_id
+    receiver_id = (body.to_user_id if body else None) or receiver_id
+
+    if receiver_id is None:
+        raise HTTPException(status_code=422, detail="Either body.to_user_id or query receiver_id is required")
 
     if receiver_id == current_user.id:
         raise HTTPException(status_code=400, detail="Cannot request self")

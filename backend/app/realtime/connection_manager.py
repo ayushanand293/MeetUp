@@ -58,8 +58,9 @@ class ConnectionManager:
         if session_id not in self.pubsub_subscriptions:
             await self._subscribe_to_session(session_id)
 
-        # Broadcast presence: user is ONLINE
-        await self.broadcast_presence(session_id, user_id, PresenceStatus.ONLINE)
+        # Broadcast presence: user is ONLINE only if peers are already connected
+        if len(self.active_connections[session_id]) > 1:
+            await self.broadcast_presence(session_id, user_id, PresenceStatus.ONLINE)
 
     async def disconnect(self, session_id: UUID, websocket: WebSocket):
         """Disconnect WebSocket and clean up."""
@@ -81,7 +82,12 @@ class ConnectionManager:
 
         # Broadcast presence: user is OFFLINE
         if user_id:
-            await self.broadcast_presence(session_id, user_id, PresenceStatus.OFFLINE)
+            try:
+                await self.broadcast_presence(session_id, user_id, PresenceStatus.OFFLINE)
+            except RuntimeError:
+                logger.warning("Skipping offline presence broadcast because event loop is closed")
+            except Exception as e:
+                logger.warning(f"Failed to broadcast offline presence: {e}")
 
     async def broadcast(self, session_id: UUID, message: dict | str, exclude_user: UUID = None) -> None:
         """Broadcast message to all users in session via Redis pub/sub.
@@ -91,9 +97,14 @@ class ConnectionManager:
         if isinstance(message, dict):
             message = json.dumps(message)
 
+        envelope = {
+            "message": message,
+            "exclude_user": str(exclude_user) if exclude_user else None,
+        }
+
         # Publish to Redis channel (all instances subscribed will receive)
         redis_client = await get_redis()
-        await redis_client.publish(f"session:{session_id}", message)
+        await redis_client.publish(f"session:{session_id}", json.dumps(envelope))
 
         track_message_broadcasted()
 
@@ -122,8 +133,13 @@ class ConnectionManager:
         if session_id in self.pubsub_subscriptions:
             pubsub = self.pubsub_subscriptions[session_id]
             channel = f"session:{session_id}"
-            await pubsub.unsubscribe(channel)
-            await pubsub.close()
+            try:
+                await pubsub.unsubscribe(channel)
+                await pubsub.aclose()
+            except RuntimeError:
+                logger.warning("Redis pubsub close skipped because event loop is closed")
+            except Exception as e:
+                logger.warning(f"Redis pubsub close failed for {channel}: {e}")
             del self.pubsub_subscriptions[session_id]
 
             logger.info(f"Unsubscribed from Redis channel: {channel}")
@@ -142,14 +158,26 @@ class ConnectionManager:
                     # Received a message from another instance or this instance
                     data = message["data"]
 
+                    parsed = None
+                    exclude_user = None
+                    payload = data
+                    try:
+                        parsed = json.loads(data)
+                    except Exception:
+                        parsed = None
+
+                    if isinstance(parsed, dict) and "message" in parsed:
+                        payload = parsed.get("message", "")
+                        exclude_user = parsed.get("exclude_user")
+
                     # Forward to all local connections in this session
-                    await self._forward_to_local_connections(session_id, data)
+                    await self._forward_to_local_connections(session_id, payload, exclude_user=exclude_user)
         except asyncio.CancelledError:
             logger.info(f"Redis listener for session {session_id} cancelled")
         except Exception as e:
             logger.error(f"Error listening to Redis channel for {session_id}: {e}")
 
-    async def _forward_to_local_connections(self, session_id: UUID, message: str):
+    async def _forward_to_local_connections(self, session_id: UUID, message: str, exclude_user: str | None = None):
         """Forward a message to all local connections in a session."""
         if session_id not in self.active_connections:
             return
@@ -161,6 +189,10 @@ class ConnectionManager:
         dead_connections = []
         for websocket in connections_copy:
             try:
+                if exclude_user:
+                    ws_user = self.ws_to_user.get(websocket)
+                    if ws_user and str(ws_user) == exclude_user:
+                        continue
                 await websocket.send_text(message)
             except Exception as e:
                 logger.warning(f"Failed to send message to WebSocket: {e}")

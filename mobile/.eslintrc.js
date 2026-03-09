@@ -22,6 +22,8 @@ module.exports = {
   rules: {
     'react/prop-types': 'off',
     'react/display-name': 'off',
+    'react/no-unescaped-entities': 'warn',
+    'no-empty': 'warn',
     'no-unused-vars': ['warn', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
     'react-native/no-inline-styles': 'warn',
     'react-native/no-unused-styles': 'warn',

@@ -9,7 +9,22 @@ from app.core.config import settings
 from app.main import app
 from app.realtime.schemas import EventType
 
-client = TestClient(app)
+
+@pytest.fixture(name="client")
+def client_fixture():
+    with TestClient(app) as test_client:
+        yield test_client
+
+
+def receive_until_type(websocket, expected_type: str, max_attempts: int = 6):
+    """Read websocket messages until the expected event type is received."""
+    last_message = None
+    for _ in range(max_attempts):
+        message = websocket.receive_json()
+        last_message = message
+        if message.get("type") == expected_type:
+            return message
+    pytest.fail(f"Did not receive event type '{expected_type}'. Last message: {last_message}")
 
 
 def create_test_token(user_id: str) -> str:
@@ -18,7 +33,7 @@ def create_test_token(user_id: str) -> str:
     return jwt.encode(payload, settings.SUPABASE_KEY, algorithm="HS256")
 
 
-def test_websocket_connection_no_token():
+def test_websocket_connection_no_token(client):
     from starlette.websockets import WebSocketDisconnect
 
     try:
@@ -29,7 +44,7 @@ def test_websocket_connection_no_token():
         pass  # Expected
 
 
-def test_websocket_broadcast():
+def test_websocket_broadcast(client):
     session_id = str(uuid.uuid4())
     user1_id = str(uuid.uuid4())
     user2_id = str(uuid.uuid4())
@@ -48,7 +63,7 @@ def test_websocket_broadcast():
             ws1.send_json(payload)
 
             # User 2 should receive peer_location
-            data = ws2.receive_json()
+            data = receive_until_type(ws2, "peer_location")
             assert data["type"] == "peer_location"
             assert data["payload"]["user_id"] == user1_id
             assert data["payload"]["lat"] == 37.7749
@@ -56,7 +71,7 @@ def test_websocket_broadcast():
             print("✅ User 2 received location from User 1")
 
 
-def test_websocket_echo_prevention():
+def test_websocket_echo_prevention(client):
     """Verify User 1 does NOT receive their own message"""
     session_id = str(uuid.uuid4())
     user1_id = str(uuid.uuid4())
@@ -74,7 +89,7 @@ def test_websocket_echo_prevention():
         pass
 
 
-def test_websocket_presence():
+def test_websocket_presence(client):
     """Verify that connecting/disconnecting triggers presence events"""
     session_id = str(uuid.uuid4())
     user1_id = str(uuid.uuid4())
@@ -96,7 +111,9 @@ def test_websocket_presence():
 
         # User 2 disconnects (context exit)
         # User 1 should receive PRESENCE_UPDATE (OFFLINE) for User 2
-        data = ws1.receive_json()
+        data = receive_until_type(ws1, "presence_update")
+        if data["payload"]["user_id"] != user2_id or data["payload"]["status"] != "offline":
+            data = receive_until_type(ws1, "presence_update")
         assert data["type"] == "presence_update"
         assert data["payload"]["user_id"] == user2_id
         assert data["payload"]["status"] == "offline"

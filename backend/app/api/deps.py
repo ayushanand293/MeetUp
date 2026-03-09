@@ -1,6 +1,5 @@
-import requests as http_requests
-
 import jwt
+import requests as http_requests
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt import PyJWTError

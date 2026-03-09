@@ -1,6 +1,6 @@
 import enum
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import Column, DateTime, Enum, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID
@@ -20,7 +20,7 @@ class RequestStatus(enum.StrEnum):
 
 
 def _default_expires_at():
-    return datetime.now(timezone.utc) + timedelta(minutes=REQUEST_TTL_MINUTES)
+    return datetime.now(UTC) + timedelta(minutes=REQUEST_TTL_MINUTES)
 
 
 class MeetRequest(Base):

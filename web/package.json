@@ -1,0 +1,26 @@
+{
+  "name": "meetup-web",
+  "type": "module",
+  "version": "1.0.0",
+  "description": "MeetUp Web Fallback - Realtime Location Sharing",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "lint": "eslint src --ext jsx --fix"
+  },
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "leaflet": "^1.9.4",
+    "react-leaflet": "^4.2.1",
+    "@supabase/supabase-js": "^2.38.0",
+    "axios": "^1.6.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.0.0",
+    "vite": "^4.5.0",
+    "eslint": "^8.50.0",
+    "eslint-plugin-react": "^7.33.0"
+  }
+}

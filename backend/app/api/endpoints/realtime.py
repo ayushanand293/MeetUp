@@ -98,6 +98,7 @@ async def websocket_endpoint(
                 if event_type == EventType.LOCATION_UPDATE:
                     # 5. Rate limiting check (1 update per 3 seconds per user, per session)
                     from datetime import datetime
+
                     last_update_key = f"last_update:{session_uuid}:{user_id}"
                     last_update_ts = await redis_client.get(last_update_key)
 

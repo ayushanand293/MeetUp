@@ -56,7 +56,6 @@ class LocationValidator:
         now = datetime.utcnow()
         # Ensure both datetimes are naive UTC for comparison
         if timestamp.tzinfo is not None:
-            import calendar
             # Convert aware timestamp to naive UTC
             timestamp = timestamp.replace(tzinfo=None)
         age = now - timestamp
