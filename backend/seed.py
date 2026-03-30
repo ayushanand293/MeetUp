@@ -84,7 +84,63 @@ def seed():
         redis_client.setex(f"loc:{session_id}:{user2_id}", DEMO_LOCATION_TTL_SECONDS, json.dumps(bob_location))
         print(f"✅ Seeded initial live locations for Alice and Bob (TTL: {DEMO_LOCATION_TTL_SECONDS}s)")
 
-        # 4. Generate Credentials
+        # 4. Create Ended Sessions (for Quick Friends & Activity Timeline)
+        now = datetime.utcnow()
+        
+        # Create 3 test friends
+        sarah_id = uuid.uuid4()
+        marcus_id = uuid.uuid4()
+        jordan_id = uuid.uuid4()
+        
+        sarah = User(id=sarah_id, email=f"sarah_{str(sarah_id)[:4]}@test.com", profile_data={"name": "Sarah"})
+        marcus = User(id=marcus_id, email=f"marcus_{str(marcus_id)[:4]}@test.com", profile_data={"name": "Marcus"})
+        jordan = User(id=jordan_id, email=f"jordan_{str(jordan_id)[:4]}@test.com", profile_data={"name": "Jordan"})
+        
+        db.add(sarah)
+        db.add(marcus)
+        db.add(jordan)
+        db.flush()
+        
+        # Ended session 1: Met Sarah 2 hours ago
+        ended_session_1 = Session(
+            id=uuid.uuid4(),
+            status=SessionStatus.ENDED,
+            created_at=now - timedelta(hours=2, minutes=30),
+            ended_at=now - timedelta(hours=2),
+            end_reason="completed"
+        )
+        p1_ended = SessionParticipant(session_id=ended_session_1.id, user_id=user1_id, joined_at=now - timedelta(hours=2, minutes=30))
+        p2_ended = SessionParticipant(session_id=ended_session_1.id, user_id=sarah_id, joined_at=now - timedelta(hours=2, minutes=30))
+        
+        # Ended session 2: Met Marcus 1 day ago
+        ended_session_2 = Session(
+            id=uuid.uuid4(),
+            status=SessionStatus.ENDED,
+            created_at=now - timedelta(days=1, hours=3),
+            ended_at=now - timedelta(days=1),
+            end_reason="completed"
+        )
+        p1_ended2 = SessionParticipant(session_id=ended_session_2.id, user_id=user1_id, joined_at=now - timedelta(days=1, hours=3))
+        p2_ended2 = SessionParticipant(session_id=ended_session_2.id, user_id=marcus_id, joined_at=now - timedelta(days=1, hours=3))
+        
+        # Ended session 3: Met Jordan 3 days ago
+        ended_session_3 = Session(
+            id=uuid.uuid4(),
+            status=SessionStatus.ENDED,
+            created_at=now - timedelta(days=3, hours=2),
+            ended_at=now - timedelta(days=3),
+            end_reason="completed"
+        )
+        p1_ended3 = SessionParticipant(session_id=ended_session_3.id, user_id=user1_id, joined_at=now - timedelta(days=3, hours=2))
+        p2_ended3 = SessionParticipant(session_id=ended_session_3.id, user_id=jordan_id, joined_at=now - timedelta(days=3, hours=2))
+        
+        db.add_all([ended_session_1, p1_ended, p2_ended, ended_session_2, p1_ended2, p2_ended2, ended_session_3, p1_ended3, p2_ended3])
+        db.commit()
+        
+        print(f"✅ Created test friends: Sarah, Marcus, Jordan")
+        print(f"✅ Created 3 ended sessions (Quick Friends & Activity Timeline)")
+
+        # 5. Generate Credentials
         # Token creation needs string usually for jwt payload
         token1 = create_test_token(str(user1_id))
         token2 = create_test_token(str(user2_id))

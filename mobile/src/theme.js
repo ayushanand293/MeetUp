@@ -6,20 +6,20 @@
 export { useTheme, ThemeProvider } from './context/ThemeContext';
 
 export const Spacing = {
-    xs: 4, sm: 8, md: 16, lg: 24, xl: 32, xxl: 48,
+    xs: 4, sm: 10, md: 16, lg: 24, xl: 32, xxl: 48,
 };
 
 export const Radius = {
-    sm: 8, md: 14, lg: 20, xl: 28, pill: 999,
+    sm: 10, md: 16, lg: 24, xl: 32, pill: 999,
 };
 
 export const Font = {
-    display: { fontSize: 34, fontWeight: '700', letterSpacing: -0.5 },
-    title: { fontSize: 22, fontWeight: '700', letterSpacing: -0.3 },
-    subtitle: { fontSize: 17, fontWeight: '600' },
+    display: { fontSize: 40, fontWeight: '800', letterSpacing: -1.0, lineHeight: 44 },
+    title: { fontSize: 24, fontWeight: '800', letterSpacing: -0.5 },
+    subtitle: { fontSize: 17, fontWeight: '700', letterSpacing: -0.2 },
     body: { fontSize: 15, fontWeight: '400' },
-    caption: { fontSize: 12, fontWeight: '500', letterSpacing: 0.2 },
-    label: { fontSize: 11, fontWeight: '700', letterSpacing: 1.2, textTransform: 'uppercase' },
+    caption: { fontSize: 12, fontWeight: '600', letterSpacing: 0.2 },
+    label: { fontSize: 11, fontWeight: '800', letterSpacing: 1.2, textTransform: 'uppercase' },
     mono: { fontSize: 20, fontWeight: '800', fontVariant: ['tabular-nums'], letterSpacing: 1 },
 };
 

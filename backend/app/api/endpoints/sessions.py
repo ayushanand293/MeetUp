@@ -162,3 +162,62 @@ async def get_session_snapshot(
         "locations": locations,
         "timestamp": datetime.utcnow().isoformat(),
     }
+
+
+@router.get("/history")
+def get_session_history(
+    limit: int = 10,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user),
+):
+    """
+    Get user's recent ended sessions (meetup history).
+    Returns the 10 most recent sessions with co-participant info and timestamps.
+    """
+    # Find all ENDED sessions for this user
+    ended_sessions = (
+        db.query(MeetSession)
+        .join(SessionParticipant, SessionParticipant.session_id == MeetSession.id)
+        .filter(
+            SessionParticipant.user_id == current_user.id,
+            MeetSession.status == SessionStatus.ENDED,
+        )
+        .order_by(MeetSession.ended_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+    history = []
+    for session in ended_sessions:
+        # Get all participants in this session
+        participants = (
+            db.query(SessionParticipant, User)
+            .join(User, User.id == SessionParticipant.user_id)
+            .filter(SessionParticipant.session_id == session.id)
+            .all()
+        )
+
+        # Find the co-participant (not current user)
+        co_participant = None
+        for part, user in participants:
+            if user.id != current_user.id:
+                co_participant = user
+                break
+
+        if co_participant:
+            # Extract name from profile_data or use email prefix
+            name = co_participant.profile_data.get("name") if co_participant.profile_data else None
+            if not name:
+                name = co_participant.email.split("@")[0].replace("_", " ").title()
+            
+            history.append({
+                "session_id": str(session.id),
+                "co_participant_id": str(co_participant.id),
+                "co_participant_name": name,
+                "co_participant_email": co_participant.email,
+                "ended_at": session.ended_at.isoformat() if session.ended_at else None,
+                "created_at": session.created_at.isoformat(),
+                "duration_seconds": int((session.ended_at - session.created_at).total_seconds()) if session.ended_at else 0,
+            })
+
+    return {"history": history}
