@@ -12,7 +12,7 @@
  */
 
 import * as Location from 'expo-location';
-import { Platform } from 'react-native';
+import { AppState } from 'react-native';
 
 const DEBUG = process.env.NODE_ENV !== 'production';
 
@@ -69,11 +69,16 @@ class LocationService extends EventEmitter {
     // Current location state
     this.currentLocation = null;
     this.isTracking = false;
+    this.isPaused = false;
     this.hasPermission = false;
 
     // Watchers and timers for cleanup
     this.locationWatcher = null;
     this.cacheUpdateTimer = null;
+    this.appStateSubscription = null;
+    this.appState = AppState.currentState;
+    this.wasTrackingBeforeBackground = false;
+    this.locationCallback = null;
 
     // Configuration
     const mockLat = parseFloat(process.env.EXPO_PUBLIC_MOCK_LAT);
@@ -107,6 +112,28 @@ class LocationService extends EventEmitter {
       lastUpdateTime: null,
       startTime: null,
     };
+
+    this._registerAppStateListener();
+  }
+
+  _registerAppStateListener() {
+    this.appStateSubscription = AppState.addEventListener('change', (nextState) => {
+      const previousState = this.appState;
+      this.appState = nextState;
+
+      if (!this.config.enableBackground && previousState === 'active' && nextState.match(/inactive|background/)) {
+        if (this.isTracking) {
+          this.wasTrackingBeforeBackground = true;
+          this.pauseTracking('app_backgrounded');
+        }
+      }
+
+      if (!this.config.enableBackground && previousState.match(/inactive|background/) && nextState === 'active') {
+        if (this.wasTrackingBeforeBackground) {
+          this.resumeTracking('app_foregrounded');
+        }
+      }
+    });
   }
 
   /**
@@ -226,6 +253,10 @@ class LocationService extends EventEmitter {
         return true;
       }
 
+      if (onLocationChange) {
+        this.locationCallback = onLocationChange;
+      }
+
       DEBUG && console.log('[LocationService] Starting location tracking...');
 
       // Check permission
@@ -291,6 +322,8 @@ class LocationService extends EventEmitter {
       );
 
       this.isTracking = true;
+      this.isPaused = false;
+      this.wasTrackingBeforeBackground = false;
       this.emit('trackingStarted');
 
       DEBUG && console.log('[LocationService] Tracking started');
@@ -310,17 +343,11 @@ class LocationService extends EventEmitter {
     try {
       DEBUG && console.log('[LocationService] Stopping location tracking...');
 
-      if (this.locationWatcher) {
-        this.locationWatcher.remove();
-        this.locationWatcher = null;
-      }
-
-      if (this.cacheUpdateTimer) {
-        clearInterval(this.cacheUpdateTimer);
-        this.cacheUpdateTimer = null;
-      }
+      this._clearTrackingResources();
 
       this.isTracking = false;
+      this.isPaused = false;
+      this.wasTrackingBeforeBackground = false;
       this.emit('trackingStopped');
 
       // Log metrics
@@ -364,10 +391,42 @@ class LocationService extends EventEmitter {
   getStatus() {
     return {
       isTracking: this.isTracking,
+      isPaused: this.isPaused,
       hasPermission: this.hasPermission,
       currentLocation: this.currentLocation,
       metrics: { ...this.metrics },
     };
+  }
+
+  pauseTracking(reason = 'manual') {
+    if (!this.isTracking) return;
+
+    this._clearTrackingResources();
+    this.isTracking = false;
+    this.isPaused = true;
+    this.emit('trackingPaused', {
+      reason,
+      timestamp: new Date().toISOString(),
+    });
+
+    DEBUG && console.log(`[LocationService] Tracking paused (${reason})`);
+  }
+
+  async resumeTracking(reason = 'manual') {
+    if (!this.isPaused) return false;
+
+    const started = await this.startTracking(this.locationCallback);
+    if (started) {
+      this.isPaused = false;
+      this.wasTrackingBeforeBackground = false;
+      this.emit('trackingResumed', {
+        reason,
+        timestamp: new Date().toISOString(),
+      });
+      DEBUG && console.log(`[LocationService] Tracking resumed (${reason})`);
+    }
+
+    return started;
   }
 
   /**
@@ -386,9 +445,18 @@ class LocationService extends EventEmitter {
     DEBUG && console.log('[LocationService] Disposing resources...');
 
     this.stopTracking();
+
+    if (this.appStateSubscription) {
+      this.appStateSubscription.remove();
+      this.appStateSubscription = null;
+    }
+
     this.removeAllListeners();
     this.currentLocation = null;
     this.hasPermission = false;
+    this.locationCallback = null;
+    this.appState = AppState.currentState;
+    this.isPaused = false;
     this.metrics = {
       totalUpdates: 0,
       totalErrors: 0,
@@ -428,6 +496,7 @@ class LocationService extends EventEmitter {
     DEBUG && console.log('[LocationService] Starting mock location tracking');
 
     this.isTracking = true;
+    this.isPaused = false;
     this.emit('trackingStarted');
 
     this.cacheUpdateTimer = setInterval(() => {
@@ -447,6 +516,18 @@ class LocationService extends EventEmitter {
         }
       }
     }, this.config.mockLocationInterval);
+  }
+
+  _clearTrackingResources() {
+    if (this.locationWatcher) {
+      this.locationWatcher.remove();
+      this.locationWatcher = null;
+    }
+
+    if (this.cacheUpdateTimer) {
+      clearInterval(this.cacheUpdateTimer);
+      this.cacheUpdateTimer = null;
+    }
   }
 }
 

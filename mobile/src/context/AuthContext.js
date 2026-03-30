@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { supabase } from '../api/supabase';
 import * as Linking from 'expo-linking';
+import analyticsService from '../services/analyticsService';
 
 // Create the Auth Context
 const AuthContext = createContext({});
@@ -19,6 +20,7 @@ export const AuthProvider = ({ children }) => {
   const [session, setSession] = useState(null);
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState(null);
+  const [pendingNavigation, setPendingNavigation] = useState(null);
 
   useEffect(() => {
     // Get initial session
@@ -41,14 +43,62 @@ export const AuthProvider = ({ children }) => {
     // Handle deep links for magic link login
     const handleDeepLink = async url => {
       if (!url) return;
-      const { queryParams } = Linking.parse(url);
+      const { path, queryParams } = Linking.parse(url);
+      const cleanPath = (path || '').replace(/^\/+/, '');
+
+      analyticsService.track('deep_link_opened', {
+        path: cleanPath || null,
+        hasToken: Boolean(queryParams?.token),
+        hasAuthTokens: Boolean(queryParams?.access_token && queryParams?.refresh_token),
+      });
+
+      if (cleanPath.startsWith('request/')) {
+        const [, requestId] = cleanPath.split('/');
+        if (requestId) {
+          analyticsService.track('deep_link_route_prepared', {
+            type: 'request',
+            requestId,
+          });
+          setPendingNavigation({
+            screen: 'AcceptRequest',
+            params: {
+              linkedRequestId: requestId,
+              fromInvite: true,
+            },
+          });
+        }
+      }
+
+      if (cleanPath.startsWith('session/')) {
+        const [, sessionId] = cleanPath.split('/');
+        if (sessionId) {
+          analyticsService.track('deep_link_route_prepared', {
+            type: 'session',
+            sessionId,
+            hasInviteToken: Boolean(queryParams?.token),
+          });
+          setPendingNavigation({
+            screen: 'ActiveSession',
+            params: {
+              sessionId,
+              inviteToken: queryParams?.token || null,
+              fromInvite: true,
+            },
+          });
+        }
+      }
 
       if (queryParams?.access_token && queryParams?.refresh_token) {
         const { error } = await supabase.auth.setSession({
           access_token: queryParams.access_token,
           refresh_token: queryParams.refresh_token,
         });
-        if (error) console.error('Error setting session from deep link:', error);
+        if (error) {
+          analyticsService.track('deep_link_auth_session_failed', { message: error?.message || 'unknown' });
+          console.error('Error setting session from deep link:', error);
+        } else {
+          analyticsService.track('deep_link_auth_session_set');
+        }
       }
     };
 
@@ -167,14 +217,46 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
+  // Update current user account details (email/phone/password/metadata)
+  const updateAccountDetails = async updates => {
+    try {
+      setLoading(true);
+      const { data, error } = await supabase.auth.updateUser(updates);
+      if (error) throw error;
+      if (data?.user) {
+        setUser(data.user);
+      }
+      return data;
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // Sign out function
   const signOut = async () => {
     try {
       setLoading(true);
       const { error } = await supabase.auth.signOut();
-      if (error) {
+      if (!error) {
+        return { mode: 'remote' };
+      }
+
+      const message = (error?.message || '').toLowerCase();
+      const isNetworkFailure = message.includes('network request failed') || message.includes('failed to fetch');
+
+      if (!isNetworkFailure) {
         throw error;
       }
+
+      // If network is unavailable, perform local-only sign-out so users can still leave the session.
+      const { error: localError } = await supabase.auth.signOut({ scope: 'local' });
+      if (localError) {
+        setSession(null);
+        setUser(null);
+        throw localError;
+      }
+
+      return { mode: 'local' };
     } catch (error) {
       console.error('Error signing out:', error);
       throw error;
@@ -184,16 +266,25 @@ export const AuthProvider = ({ children }) => {
   };
 
   // Context value
+  const consumePendingNavigation = () => {
+    const next = pendingNavigation;
+    setPendingNavigation(null);
+    return next;
+  };
+
   const value = {
     session,
     user,
     loading,
+    pendingNavigation,
+    consumePendingNavigation,
     signUpWithEmail,
     signInWithEmail,
     signInWithPhone,
     verifyPhoneOTP,
     resetPasswordForEmail,
     updateUserPassword,
+    updateAccountDetails,
     signOut,
   };
 

@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import {
     View, Text, TextInput, TouchableOpacity, StyleSheet,
     Alert, ActivityIndicator, KeyboardAvoidingView, Platform,
-    ScrollView, Animated, Dimensions,
+    ScrollView, Animated, Dimensions, Image,
 } from 'react-native';
 import { useAuth } from '../context/AuthContext';
 import client from '../api/client';
@@ -29,6 +29,7 @@ const LoginScreen = ({ navigation, route }) => {
     const footerOpacity = useRef(new Animated.Value(0)).current;
     const btnScale = useRef(new Animated.Value(1)).current;
     const tabIndicator = useRef(new Animated.Value(0)).current;
+    const ambient = useRef(new Animated.Value(0)).current;
 
     useEffect(() => {
         Animated.sequence([
@@ -43,6 +44,17 @@ const LoginScreen = ({ navigation, route }) => {
             Animated.timing(footerOpacity, { toValue: 1, duration: 300, useNativeDriver: true }),
         ]).start();
     }, []);
+
+    useEffect(() => {
+        const loop = Animated.loop(
+            Animated.sequence([
+                Animated.timing(ambient, { toValue: 1, duration: 2800, useNativeDriver: true }),
+                Animated.timing(ambient, { toValue: 0, duration: 2800, useNativeDriver: true }),
+            ])
+        );
+        loop.start();
+        return () => loop.stop();
+    }, [ambient]);
 
     useEffect(() => {
         Animated.spring(tabIndicator, {
@@ -81,28 +93,70 @@ const LoginScreen = ({ navigation, route }) => {
 
     const s = makeStyles(colors);
     const tabTranslateX = tabIndicator.interpolate({ inputRange: [0, 1], outputRange: [0, (width - Spacing.lg * 2 - Spacing.lg * 2 - 6) / 2] });
+    const ambientUp = ambient.interpolate({ inputRange: [0, 1], outputRange: [0, -12] });
+    const ambientDown = ambient.interpolate({ inputRange: [0, 1], outputRange: [0, 8] });
 
     return (
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={[s.root, { backgroundColor: colors.bg }]}>
+            <Animated.View
+                pointerEvents="none"
+                style={{
+                    position: 'absolute',
+                    width: 220,
+                    height: 220,
+                    borderRadius: 110,
+                    top: -80,
+                    right: -70,
+                    backgroundColor: colors.accentBg,
+                    opacity: 0.95,
+                    transform: [{ translateY: ambientUp }],
+                }}
+            />
+            <Animated.View
+                pointerEvents="none"
+                style={{
+                    position: 'absolute',
+                    width: 180,
+                    height: 180,
+                    borderRadius: 90,
+                    bottom: 60,
+                    left: -70,
+                    backgroundColor: colors.surfaceGlass,
+                    opacity: 0.7,
+                    transform: [{ translateY: ambientDown }],
+                }}
+            />
+
             <ScrollView contentContainerStyle={s.scroll} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
 
                 {/* Logo */}
                 <Animated.View style={[s.logoArea, { opacity: logoOpacity, transform: [{ scale: logoScale }] }]}>
-                    <View style={[s.logoMark, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-                        <View style={[s.logoPin, { backgroundColor: colors.accent }]} />
+                    <View style={[s.logoMark, { backgroundColor: colors.surface, borderColor: colors.border }]}> 
+                        <Image source={require('../../assets/Meet up logo.png')} style={s.logoImage} resizeMode="contain" />
                     </View>
-                    <Text style={[Font.display, { color: colors.textPrimary, letterSpacing: 1 }]}>MeetUp</Text>
-                    <Text style={[Font.body, { color: colors.textSecondary, marginTop: 6, textAlign: 'center' }]}>
-                        Find your people, right now.
+                    <Text style={[Font.display, { color: colors.textPrimary, letterSpacing: -0.8 }]}>MeetUp</Text>
+                    <Text style={[Font.body, { color: colors.textSecondary, marginTop: 6, textAlign: 'center', fontWeight: '600' }]}> 
+                        Sync your world in seconds.
                     </Text>
                 </Animated.View>
 
                 {/* Card */}
-                <Animated.View style={[s.card, { backgroundColor: colors.surface, borderColor: colors.border, opacity: cardOpacity, transform: [{ translateY: cardY }] }]}>
-                    <Text style={[Font.title, { color: colors.textPrimary, marginBottom: Spacing.lg }]}>Welcome back</Text>
+                <Animated.View style={[s.card, {
+                    backgroundColor: colors.surface,
+                    borderColor: colors.border,
+                    opacity: cardOpacity,
+                    transform: [{ translateY: cardY }],
+                    shadowColor: colors.textPrimary,
+                    shadowOpacity: 0.08,
+                    shadowOffset: { width: 0, height: 10 },
+                    shadowRadius: 16,
+                    elevation: 5,
+                }]}> 
+                    <Text style={[Font.title, { color: colors.textPrimary, marginBottom: 6 }]}>Welcome back</Text>
+                    <Text style={[Font.caption, { color: colors.textMuted, marginBottom: Spacing.lg }]}>SIGN IN TO CONTINUE</Text>
 
                     {/* Tab switcher */}
-                    <View style={[s.tabRow, { backgroundColor: colors.surfaceElevated }]}>
+                    <View style={[s.tabRow, { backgroundColor: colors.surfaceElevated }]}> 
                         <Animated.View style={[s.tabSlider, { backgroundColor: colors.borderLight, transform: [{ translateX: tabTranslateX }] }]} />
                         {['email', 'phone'].map(tab => (
                             <TouchableOpacity key={tab} style={s.tab} onPress={() => { setActiveTab(tab); setOtpSent(false); }}>
@@ -121,7 +175,7 @@ const LoginScreen = ({ navigation, route }) => {
                             <Field label="PASSWORD" value={password} onChangeText={setPassword} placeholder="••••••••"
                                 secureTextEntry colors={colors} focused={focused === 'pass'}
                                 onFocus={() => setFocused('pass')} onBlur={() => setFocused(null)}
-                                right={<TouchableOpacity onPress={() => navigation.navigate('ForgotPassword')}><Text style={[Font.caption, { color: colors.accent }]}>Forgot?</Text></TouchableOpacity>} />
+                                right={<TouchableOpacity onPress={() => navigation.navigate('ForgotPassword')}><Text style={[Font.caption, { color: colors.textPrimary }]}>Forgot?</Text></TouchableOpacity>} />
                             <AnimBtn label="Sign In" loading={loading} onPress={handleEmailLogin} colors={colors} scale={btnScale} />
                         </>
                     ) : !otpSent ? (
@@ -161,9 +215,9 @@ const Field = ({ label, right, focused, colors, ...props }) => (
             <Text style={[Font.label, { color: colors.textMuted }]}>{label}</Text>
             {right}
         </View>
-        <TextInput
+            <TextInput
             style={{
-                backgroundColor: colors.inputBg, borderWidth: 1,
+                backgroundColor: colors.surfaceSoft || colors.inputBg, borderWidth: 1,
                 borderColor: focused ? colors.textMuted : colors.border,
                 borderRadius: Radius.md, padding: 14, color: colors.textPrimary, fontSize: 15,
             }}
@@ -178,6 +232,11 @@ const AnimBtn = ({ label, loading: isLoading, onPress, colors, scale }) => (
             style={{
                 backgroundColor: colors.textPrimary, borderRadius: Radius.md,
                 paddingVertical: 15, alignItems: 'center', marginTop: Spacing.sm,
+                shadowColor: colors.textPrimary,
+                shadowOpacity: 0.08,
+                shadowOffset: { width: 0, height: 8 },
+                shadowRadius: 12,
+                elevation: 3,
             }}
             onPressIn={() => anim.pressIn(scale)} onPressOut={() => anim.pressOut(scale)}
             onPress={onPress} disabled={isLoading}>
@@ -191,10 +250,15 @@ const makeStyles = (c) => StyleSheet.create({
     scroll: { flexGrow: 1, padding: Spacing.lg, justifyContent: 'center' },
     logoArea: { alignItems: 'center', marginBottom: Spacing.xl },
     logoMark: {
-        width: 64, height: 64, borderRadius: 20, borderWidth: 1.5,
+        width: 92, height: 92, borderRadius: 24, borderWidth: 1.5,
         justifyContent: 'center', alignItems: 'center', marginBottom: Spacing.md,
+        shadowColor: c.textPrimary,
+        shadowOpacity: 0.09,
+        shadowRadius: 14,
+        shadowOffset: { width: 0, height: 8 },
+        elevation: 4,
     },
-    logoPin: { width: 20, height: 20, borderRadius: 10 },
+    logoImage: { width: 72, height: 72 },
     card: { borderRadius: Radius.xl, padding: Spacing.lg, borderWidth: 1 },
     tabRow: {
         flexDirection: 'row', borderRadius: Radius.md, padding: 3,

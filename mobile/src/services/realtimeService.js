@@ -75,6 +75,7 @@ class RealtimeService extends EventEmitter {
     // Connection state
     this.ws = null;
     this.url = null;
+    this.baseUrl = null;
     this.token = null;
     this.sessionId = null;
     
@@ -91,6 +92,13 @@ class RealtimeService extends EventEmitter {
       jitter: true, // Add randomness to prevent thundering herd
       maxAttempts: 10,
     };
+
+    this.graceConfig = {
+      enabled: true,
+      graceWindowMs: 90000, // 90 seconds for temporary disconnect recovery
+    };
+    this.graceTimer = null;
+    this.reconnectTimer = null;
     
     // Message handling
     this.messageQueue = [];
@@ -145,10 +153,15 @@ class RealtimeService extends EventEmitter {
 
         this.token = token;
         this.sessionId = sessionId;
+        this.baseUrl = baseUrl;
+        this.isManualClose = false;
         
         // Merge options
         if (options.reconnectConfig) {
           this.reconnectConfig = { ...this.reconnectConfig, ...options.reconnectConfig };
+        }
+        if (options.graceConfig) {
+          this.graceConfig = { ...this.graceConfig, ...options.graceConfig };
         }
 
         // Construct WebSocket URL
@@ -237,6 +250,20 @@ class RealtimeService extends EventEmitter {
   }
 
   /**
+   * Signal manual arrival confirmation (Week 5 UI flow)
+   * @returns {boolean}
+   */
+  sendImHere() {
+    const payload = {
+      type: 'im_here',
+      payload: {
+        timestamp: new Date().toISOString(),
+      },
+    };
+    return this._sendMessage(payload);
+  }
+
+  /**
    * Gracefully disconnect
    */
   disconnect() {
@@ -313,7 +340,7 @@ class RealtimeService extends EventEmitter {
    * Handle WebSocket open
    * @private
    */
-  _onOpen(resolve, reject) {
+  _onOpen(resolve, _reject) {
     DEBUG && console.log('[RealtimeService] WebSocket opened');
     
     this.connectionStatus = 'connected';
@@ -414,8 +441,8 @@ class RealtimeService extends EventEmitter {
       return;
     }
 
-    // Attempt reconnection
-    this._scheduleReconnect();
+    // Enter grace window first, then attempt reconnection.
+    this._startGraceWindowOrReconnect();
   }
 
   /**
@@ -534,13 +561,43 @@ class RealtimeService extends EventEmitter {
       nextRetryIn: delay,
     });
 
-    setTimeout(() => {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
       if (this.connectionStatus === 'reconnecting') {
         DEBUG && console.log('[RealtimeService] Attempting reconnect...');
         this.metrics.reconnectAttempts++;
-        this.connect(this.token, this.sessionId);
+        this.connect(this.token, this.sessionId, this.baseUrl);
       }
     }, delay);
+  }
+
+  _startGraceWindowOrReconnect() {
+    if (!this.graceConfig.enabled || this.connectionAttempts > 0) {
+      this._scheduleReconnect();
+      return;
+    }
+
+    const waitMs = this.graceConfig.graceWindowMs;
+    this.connectionStatus = 'grace';
+    this.emit('statusChange', {
+      status: 'grace',
+      nextRetryIn: waitMs,
+    });
+
+    DEBUG && console.log(`[RealtimeService] Entering grace window for ${(waitMs / 1000).toFixed(0)}s`);
+
+    this.graceTimer = setTimeout(() => {
+      this.graceTimer = null;
+
+      if (this.connectionStatus === 'grace' && !this.isManualClose) {
+        this._scheduleReconnect();
+      }
+    }, waitMs);
   }
 
   /**
@@ -581,6 +638,14 @@ class RealtimeService extends EventEmitter {
    */
   _cleanup() {
     this._stopHeartbeat();
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    if (this.graceTimer) {
+      clearTimeout(this.graceTimer);
+      this.graceTimer = null;
+    }
     this.ws = null;
     this.subscriptionRooms.clear();
   }
