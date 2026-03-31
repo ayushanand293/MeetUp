@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -7,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.api import deps
 from app.core.database import get_db
+from app.core.idempotency import check_and_cache_idempotency, get_cached_response, get_idempotency_key
 from app.models.meet_request import MeetRequest, RequestStatus
 from app.models.session import Session as MeetSession
 from app.models.session import SessionParticipant, SessionStatus
@@ -149,15 +151,23 @@ def list_outgoing_requests(
 
 
 @router.post("/{request_id}/accept")
-def accept_request(
+async def accept_request(
     request_id: UUID,
+    idempotency_key: Optional[str] = Depends(get_idempotency_key),
     db: Session = Depends(get_db),
     current_user: User = Depends(deps.get_current_user),
 ):
     """
     Accept a pending meet request.
     Automatically creates an ACTIVE session and returns the session_id.
+    Idempotent: same request (same idempotency_key) returns same result.
     """
+    # Check cache if idempotency key provided
+    if idempotency_key:
+        cached = await get_cached_response("accept_request", current_user.id, idempotency_key)
+        if cached:
+            return cached
+
     req = db.query(MeetRequest).filter(MeetRequest.id == request_id).first()
     if not req:
         raise HTTPException(status_code=404, detail="Request not found")
@@ -202,12 +212,18 @@ def accept_request(
     requester = db.query(User).filter(User.id == req.requester_id).first()
     requester_name = (requester.profile_data or {}).get("display_name", requester.email) if requester else "Peer"
 
-    return {
+    response = {
         "status": "accepted",
         "session_id": str(session.id),
         "peer_name": requester_name,
         "peer_id": str(req.requester_id),
     }
+
+    # Cache response if idempotency key provided
+    if idempotency_key:
+        await check_and_cache_idempotency("accept_request", current_user.id, idempotency_key, response)
+
+    return response
 
 
 @router.post("/{request_id}/decline")
