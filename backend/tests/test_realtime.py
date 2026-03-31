@@ -5,6 +5,7 @@ import jwt
 import pytest
 from fastapi.testclient import TestClient
 
+import app.api.endpoints.realtime as realtime_endpoint
 from app.core.config import settings
 from app.main import app
 from app.realtime.schemas import EventType
@@ -118,3 +119,25 @@ def test_websocket_presence(client):
         assert data["payload"]["user_id"] == user2_id
         assert data["payload"]["status"] == "offline"
         print("✅ User 1 received PRESENCE: OFFLINE for User 2")
+
+
+def test_websocket_end_session_event_broadcast(client, monkeypatch):
+    session_id = str(uuid.uuid4())
+    user1_id = str(uuid.uuid4())
+    user2_id = str(uuid.uuid4())
+
+    token1 = create_test_token(user1_id)
+    token2 = create_test_token(user2_id)
+
+    monkeypatch.setattr(realtime_endpoint, "_end_session_if_active", lambda _sid, reason: True)
+
+    with client.websocket_connect(f"/api/v1/ws/meetup?token={token2}&session_id={session_id}") as ws2:
+        with client.websocket_connect(f"/api/v1/ws/meetup?token={token1}&session_id={session_id}") as ws1:
+            # Drain initial presence update for second client.
+            _ = ws2.receive_json()
+
+            ws1.send_json({"type": "end_session", "payload": {"reason": "ARRIVAL_CONFIRMED"}})
+
+            data = receive_until_type(ws2, "session_ended")
+            assert data["type"] == "session_ended"
+            assert data["payload"]["reason"] == "ARRIVAL_CONFIRMED"

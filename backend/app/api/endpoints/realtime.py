@@ -1,28 +1,37 @@
 import json
 import logging
+from datetime import datetime
 from typing import Annotated
 from uuid import UUID
 
 import jwt
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect, status
 from jwt import PyJWTError
+from sqlalchemy import text
 
 from app.core.config import settings
+from app.core.database import SessionLocal
 from app.core.metrics import (
     track_message_received,
     track_rate_limit_hit,
+    track_session_ended,
     track_validation_error,
 )
+from app.core.proximity import adaptive_threshold_m, haversine_distance_m, should_auto_end
 from app.core.redis import get_redis
 from app.core.validation import validate_location_update
+from app.models.session import ParticipantStatus, Session, SessionParticipant, SessionStatus
 from app.realtime.connection_manager import manager
 from app.realtime.schemas import (
+    EndSessionEvent,
     ErrorEvent,
     ErrorPayload,
     EventType,
     LocationUpdateEvent,
     PeerLocationEvent,
     PeerLocationPayload,
+    SessionEndedEvent,
+    SessionEndedPayload,
 )
 
 logger = logging.getLogger(__name__)
@@ -31,7 +40,193 @@ logger = logging.getLogger(__name__)
 RATE_LIMIT_MESSAGES_PER_SEC = 10
 RATE_LIMIT_WINDOW_SEC = 1
 
+LOCATION_TTL_SECONDS = 120
+PROXIMITY_STATE_TTL_SECONDS = 120
+PROXIMITY_REQUIRED_CONSECUTIVE_UPDATES = 5
+PROXIMITY_DWELL_SECONDS = 12.0
+
 router = APIRouter()
+
+POSTGIS_DISTANCE_SQL = text(
+    """
+    SELECT ST_DistanceSphere(
+        ST_SetSRID(ST_MakePoint(:lon1, :lat1), 4326),
+        ST_SetSRID(ST_MakePoint(:lon2, :lat2), 4326)
+    )
+    """
+)
+
+
+def _proximity_state_key(session_id: UUID, user_a: UUID, user_b: UUID) -> str:
+    left, right = sorted([str(user_a), str(user_b)])
+    return f"prox:{session_id}:{left}:{right}"
+
+
+def _location_key(session_id: UUID, user_id: UUID) -> str:
+    return f"loc:{session_id}:{user_id}"
+
+
+def _proximity_lock_key(session_id: UUID) -> str:
+    return f"prox_lock:{session_id}"
+
+
+def _end_session_if_active(session_id: UUID, reason: str) -> bool:
+    db = SessionLocal()
+    try:
+        session = db.query(Session).filter(Session.id == session_id).first()
+        if not session or session.status != SessionStatus.ACTIVE:
+            return False
+
+        session.status = SessionStatus.ENDED
+        session.end_reason = reason
+        session.ended_at = datetime.utcnow()
+        db.commit()
+        return True
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+def _postgis_distance_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float | None:
+    db = SessionLocal()
+    try:
+        result = db.execute(
+            POSTGIS_DISTANCE_SQL,
+            {
+                "lat1": lat1,
+                "lon1": lon1,
+                "lat2": lat2,
+                "lon2": lon2,
+            },
+        ).scalar_one_or_none()
+        if result is None:
+            return None
+        return float(result)
+    except Exception:
+        # Keep proximity logic resilient in environments where PostGIS is absent.
+        return None
+    finally:
+        db.close()
+
+
+def _active_participant_ids(session_id: UUID) -> list[UUID]:
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(SessionParticipant.user_id)
+            .filter(
+                SessionParticipant.session_id == session_id,
+                SessionParticipant.status == ParticipantStatus.JOINED,
+            )
+            .all()
+        )
+        return [row[0] for row in rows]
+    finally:
+        db.close()
+
+
+async def _evaluate_proximity_and_auto_end(
+    session_id: UUID,
+    sender_user_id: UUID,
+    sender_payload,
+    redis_client,
+) -> bool:
+    participant_ids = _active_participant_ids(session_id)
+    if len(participant_ids) < 2:
+        return False
+
+    now_ts = datetime.utcnow().timestamp()
+
+    for peer_user_id in participant_ids:
+        if peer_user_id == sender_user_id:
+            continue
+
+        peer_key = _location_key(session_id, peer_user_id)
+        peer_location_raw = await redis_client.get(peer_key)
+        if not peer_location_raw:
+            continue
+
+        try:
+            peer_location = json.loads(peer_location_raw)
+            peer_lat = float(peer_location["lat"])
+            peer_lon = float(peer_location["lon"])
+            peer_acc = float(peer_location.get("accuracy_m", 30.0))
+        except Exception:
+            continue
+
+        distance_m = _postgis_distance_m(
+            sender_payload.lat,
+            sender_payload.lon,
+            peer_lat,
+            peer_lon,
+        )
+        if distance_m is None:
+            distance_m = haversine_distance_m(
+                sender_payload.lat,
+                sender_payload.lon,
+                peer_lat,
+                peer_lon,
+            )
+        threshold_m = adaptive_threshold_m(sender_payload.accuracy_m, peer_acc)
+        within_threshold = distance_m <= threshold_m
+
+        state_key = _proximity_state_key(session_id, sender_user_id, peer_user_id)
+        if not within_threshold:
+            await redis_client.delete(state_key)
+            continue
+
+        state = await redis_client.hgetall(state_key)
+        previous_count = int(state.get("count", "0"))
+        first_hit_ts = float(state.get("first_hit_ts", str(now_ts)))
+        consecutive_count = previous_count + 1
+
+        await redis_client.hset(
+            state_key,
+            mapping={
+                "count": consecutive_count,
+                "first_hit_ts": first_hit_ts,
+                "last_hit_ts": now_ts,
+            },
+        )
+        await redis_client.expire(state_key, PROXIMITY_STATE_TTL_SECONDS)
+
+        if not should_auto_end(
+            consecutive_hits=consecutive_count,
+            first_hit_ts=first_hit_ts,
+            now_ts=now_ts,
+            min_consecutive_hits=PROXIMITY_REQUIRED_CONSECUTIVE_UPDATES,
+            dwell_seconds=PROXIMITY_DWELL_SECONDS,
+        ):
+            continue
+
+        lock_key = _proximity_lock_key(session_id)
+        lock_acquired = await redis_client.set(lock_key, "1", ex=10, nx=True)
+        if not lock_acquired:
+            continue
+
+        try:
+            ended = _end_session_if_active(session_id, reason="PROXIMITY_REACHED")
+        finally:
+            await redis_client.delete(lock_key)
+
+        if ended:
+            await redis_client.delete(state_key)
+            track_session_ended(str(session_id))
+            ended_event = SessionEndedEvent(
+                payload=SessionEndedPayload(reason="PROXIMITY_REACHED", ended_at=datetime.utcnow())
+            )
+            await manager.broadcast(session_id, ended_event.model_dump_json())
+            logger.info(
+                "Session %s auto-ended due to proximity between %s and %s",
+                session_id,
+                sender_user_id,
+                peer_user_id,
+            )
+            return True
+
+    return False
 
 
 @router.websocket("/meetup")
@@ -97,8 +292,6 @@ async def websocket_endpoint(
 
                 if event_type == EventType.LOCATION_UPDATE:
                     # 5. Rate limiting check (1 update per 3 seconds per user, per session)
-                    from datetime import datetime
-
                     last_update_key = f"last_update:{session_uuid}:{user_id}"
                     last_update_ts = await redis_client.get(last_update_key)
 
@@ -151,6 +344,30 @@ async def websocket_endpoint(
                         "timestamp": payload.timestamp,
                     }
 
+                    # Persist latest location for fallback snapshots and proximity checks.
+                    await redis_client.setex(
+                        _location_key(session_uuid, user_id),
+                        LOCATION_TTL_SECONDS,
+                        json.dumps(
+                            {
+                                "lat": payload.lat,
+                                "lon": payload.lon,
+                                "accuracy_m": payload.accuracy_m,
+                                "timestamp": payload.timestamp.isoformat(),
+                            }
+                        ),
+                    )
+                    await redis_client.setex(last_update_key, 30, str(datetime.utcnow().timestamp()))
+
+                    auto_ended = await _evaluate_proximity_and_auto_end(
+                        session_id=session_uuid,
+                        sender_user_id=user_id,
+                        sender_payload=payload,
+                        redis_client=redis_client,
+                    )
+                    if auto_ended:
+                        continue
+
                     # 9. Broadcast to session
                     peer_event = PeerLocationEvent(
                         payload=PeerLocationPayload(user_id=user_id, **location_event.payload.model_dump())
@@ -160,9 +377,26 @@ async def websocket_endpoint(
                     await manager.broadcast(session_uuid, peer_event.model_dump_json(), exclude_user=user_id)
 
                 elif event_type == EventType.END_SESSION:
-                    # Handle end session (could trigger session end via API)
-                    logger.info(f"User {user_id} sent end_session event")
-                    pass
+                    # Allow explicit user confirmation (e.g., "I'm here") to close the session.
+                    try:
+                        end_event = EndSessionEvent(**event_data)
+                    except Exception as e:
+                        track_validation_error("parse_error")
+                        error_event = ErrorEvent(
+                            payload=ErrorPayload(code="INVALID_PAYLOAD", message=f"Failed to parse: {str(e)}")
+                        )
+                        await websocket.send_text(error_event.model_dump_json())
+                        continue
+
+                    reason = end_event.payload.reason or "USER_ACTION"
+                    ended = _end_session_if_active(session_uuid, reason=reason)
+                    if ended:
+                        track_session_ended(str(session_uuid))
+                        ended_event = SessionEndedEvent(
+                            payload=SessionEndedPayload(reason=reason, ended_at=datetime.utcnow())
+                        )
+                        await manager.broadcast(session_uuid, ended_event.model_dump_json())
+                        logger.info("Session %s ended by user %s with reason %s", session_uuid, user_id, reason)
 
             except Exception as e:
                 logger.error(f"WebSocket Error: {e}", exc_info=True)
