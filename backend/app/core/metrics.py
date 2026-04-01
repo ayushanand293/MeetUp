@@ -1,6 +1,7 @@
 """In-memory metrics collection for the realtime gateway."""
 
 from datetime import datetime
+import re
 from threading import Lock
 
 
@@ -97,6 +98,16 @@ def track_session_ended(session_id: str) -> None:
     _metrics.decrement_gauge("sessions_active")
 
 
+def track_auto_end() -> None:
+    """Track proximity-triggered automatic session end."""
+    _metrics.increment_counter("auto_end_count")
+
+
+def track_manual_end() -> None:
+    """Track user-triggered manual session end."""
+    _metrics.increment_counter("manual_end_count")
+
+
 def track_message_received(event_type: str) -> None:
     """Track message received."""
     _metrics.increment_counter("messages_received")
@@ -117,3 +128,28 @@ def track_validation_error(error_type: str) -> None:
     """Track validation errors."""
     _metrics.increment_counter("validation_errors")
     _metrics.increment_counter(f"validation_error:{error_type}:count")
+
+
+def _to_prometheus_name(name: str) -> str:
+    normalized = re.sub(r"[^a-zA-Z0-9_]", "_", name)
+    return f"meetup_{normalized}"
+
+
+def export_prometheus_text() -> str:
+    """Export current metrics in Prometheus text exposition format."""
+    snapshot = _metrics.get_all()
+    lines: list[str] = []
+
+    counters = snapshot.get("counters", {})
+    for name, value in counters.items():
+        metric_name = _to_prometheus_name(name)
+        lines.append(f"# TYPE {metric_name} counter")
+        lines.append(f"{metric_name} {value}")
+
+    gauges = snapshot.get("gauges", {})
+    for name, value in gauges.items():
+        metric_name = _to_prometheus_name(name)
+        lines.append(f"# TYPE {metric_name} gauge")
+        lines.append(f"{metric_name} {value}")
+
+    return "\n".join(lines) + "\n"

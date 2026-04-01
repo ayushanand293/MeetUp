@@ -1,12 +1,12 @@
 # MeetUp Frontend + Mobile Progress Tracker
 
-Last updated: 2026-03-29 (implementation in progress)
+Last updated: 2026-03-31 (Code complete, entering QA)
 Owner: Frontend/Mobile partner
 
 ## At a glance
-- Weeks completed: 7 of 8
-- In progress: Week 5 backend acknowledgement integration
-- Next milestone: End of Week 5 handshake contract integration
+- Code Implementation: 100% complete across all 8 weeks
+- In progress: Manual QA sweeps & Demo preparation
+- Next milestone: Final release and handoff
 
 ## Week-by-week status
 
@@ -43,7 +43,7 @@ Remaining:
 - Manual on-device validation pass (background -> foreground -> snapshot refresh)
 
 ### Week 5 - Geo intelligence
-Status: In progress
+Status: Done
 Done now:
 - Added modern distance intelligence bar with threshold-aware status states
 - Added proximity-gated "I'm Here" CTA (enabled at <=50m)
@@ -53,12 +53,7 @@ Done now:
 - Added robust "I'm Here" dedupe + fallback submission flow (WS + optional API)
 - Added waiting-timeout handling and manual confirm path for timer edge cases
 - Added richer celebration motion polish for successful proximity end
-
-In progress:
-- Backend confirmation endpoint/event wiring for canonical "I'm Here" handshake if required
-
-Remaining:
-- Add backend-specific acknowledgement UX once endpoint contract is finalized
+- **Fully integrated backend endpoint contracts (`/im-here`) and WS auto closures (`PROXIMITY_MET`)**
 
 ### Week 6 - Reliability UX
 Status: Done
@@ -85,11 +80,10 @@ Done now:
 - Added request-level deep-link parsing (`meetup://request/{requestId}`) with post-auth navigation to requests
 - Added linked-request highlighting and expired/missing request feedback in request inbox
 - Added WhatsApp-friendly invite share copy and tokenized link payload
-- Added optional invite-token redeem call on session open with graceful fallback when endpoint is unavailable
+- **Integrated `/invite/redeem` API call into the ActiveSessionScreen on mount**
 - Added share/open analytics instrumentation for invite and request deep-link journeys
 
 Remaining:
-- Backend invite-token redeem endpoint contract finalization (optional; frontend fallback is active)
 - Manual deep-link QA pass across logged-out and logged-in states
 
 ### Week 8 - Final wow + packaging
@@ -134,10 +128,9 @@ Remaining:
 - mobile/src/screens/AcceptRequestScreen.js
 
 ## Next implementation queue
-1. Week 5: backend acknowledgement UX for canonical "I'm Here" contract
-2. End-to-end device QA (network drop, deep links, background/foreground)
-3. Release candidate bug-fix sweep from QA findings
-4. Demo script and packaging finalization
+1. End-to-end device QA (network drop, deep links, background/foreground)
+2. Release candidate bug-fix sweep from QA findings
+3. Demo script and packaging finalization
 
 ## Partner handoff notes
 - Backend support is assumed available for throttle, snapshot, and auto-end events.

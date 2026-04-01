@@ -129,7 +129,7 @@ def test_websocket_end_session_event_broadcast(client, monkeypatch):
     token1 = create_test_token(user1_id)
     token2 = create_test_token(user2_id)
 
-    monkeypatch.setattr(realtime_endpoint, "_end_session_if_active", lambda _sid, reason: True)
+    monkeypatch.setattr(realtime_endpoint, "end_session_sync", lambda _sid, reason: True)
 
     with client.websocket_connect(f"/api/v1/ws/meetup?token={token2}&session_id={session_id}") as ws2:
         with client.websocket_connect(f"/api/v1/ws/meetup?token={token1}&session_id={session_id}") as ws1:

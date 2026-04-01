@@ -21,16 +21,12 @@ import {
   ActivityIndicator,
   SafeAreaView,
   Modal,
-  Share,
   Animated,
-  Easing,
 } from 'react-native';
-import * as Linking from 'expo-linking';
 import { WebView } from 'react-native-webview';
 import { useAuth } from '../context/AuthContext';
 import locationService from '../services/locationService';
 import realtimeService from '../services/realtimeService';
-import analyticsService from '../services/analyticsService';
 import client from '../api/client';
 import { supabase } from '../api/supabase';
 import { getRoute, formatDistance, formatDuration, haversineDistance, TransportMode } from '../services/orsService';
@@ -40,42 +36,25 @@ import ModernDistanceBar from '../components/ModernDistanceBar';
 const DEBUG = process.env.NODE_ENV !== 'production';
 
 const ActiveSessionScreen = ({ route, navigation }) => {
-  const {
-    friend,
-    sessionId: routeSessionId,
-    fromInvite,
-    inviteToken,
-  } = route.params || {};
+  const { friend, sessionId: routeSessionId, inviteToken } = route.params || {};
   const { user } = useAuth();
-  const { colors } = useTheme();
+  const { colors, isDark } = useTheme();
   const s = makeStyles(colors);
 
   // Location state
   const [myLocation, setMyLocation] = useState(null);
   const [peerLocation, setPeerLocation] = useState(null);
   const [locationError, setLocationError] = useState(null);
-  const [isLocationPaused, setIsLocationPaused] = useState(false);
-  const [isRefreshingSnapshot, setIsRefreshingSnapshot] = useState(false);
 
   // WebSocket state
   const [wsStatus, setWsStatus] = useState('disconnected');
   const [wsError, setWsError] = useState(null);
   const [reconnectCountdown, setReconnectCountdown] = useState(0);
-  const [reconnectAttempt, setReconnectAttempt] = useState(0);
-  const [connectionNotice, setConnectionNotice] = useState(null);
 
   // Session state
   const [sessionId, setSessionId] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isStopping, setIsStopping] = useState(false);
-  const [isSharingInvite, setIsSharingInvite] = useState(false);
-  const [isIAmHereOpen, setIsIAmHereOpen] = useState(false);
-  const [iAmHereCountdown, setIAmHereCountdown] = useState(60);
-  const [iAmHereWaiting, setIAmHereWaiting] = useState(false);
-  const [isSubmittingIAmHere, setIsSubmittingIAmHere] = useState(false);
-  const [showMeetingDetected, setShowMeetingDetected] = useState(false);
-  const [showInviteJoined, setShowInviteJoined] = useState(!!fromInvite);
-  const [inviteTokenIssue, setInviteTokenIssue] = useState(false);
 
   // Routing state
   const [selectedMode, setSelectedMode] = useState('foot-walking');
@@ -85,10 +64,6 @@ const ActiveSessionScreen = ({ route, navigation }) => {
   const [routeDuration, setRouteDuration] = useState(null);
   const [routeLoading, setRouteLoading] = useState(false);
   const routeFetchRef = useRef(null);
-  const iAmHereTimerRef = useRef(null);
-  const iAmHereWaitingTimeoutRef = useRef(null);
-  const iAmHereWaitingStateRef = useRef(false);
-  const lastImHereSubmitRef = useRef(0);
 
   // Peer display name (passed from accept flow or friend param)
   const peerName = friend?.display_name || friend?.name || 'Peer';
@@ -96,9 +71,6 @@ const ActiveSessionScreen = ({ route, navigation }) => {
   // Peer info
   const [peerLastSeenText, setPeerLastSeenText] = useState('Not yet connected');
   const [peerIsStale, setPeerIsStale] = useState(false);
-  const [peerLocationExpired, setPeerLocationExpired] = useState(false);
-  const directDistanceM = myLocation && peerLocation ? haversineDistance(myLocation, peerLocation) : null;
-  const canConfirmArrival = directDistanceM != null && directDistanceM <= 50;
 
   // Refs for cleanup
   const webViewRef = useRef(null);
@@ -106,60 +78,18 @@ const ActiveSessionScreen = ({ route, navigation }) => {
   const lastSeenUpdateRef = useRef(null);
   const locationUnsubscribeRef = useRef(null);
   const wsEventUnsubscribesRef = useRef({});
-  const locationEventUnsubscribesRef = useRef([]);
   const countdownIntervalRef = useRef(null);
   const isMountedRef = useRef(true);
-  const iAmHerePulse = useRef(new Animated.Value(1)).current;
-  const successScale = useRef(new Animated.Value(0.94)).current;
-  const successOpacity = useRef(new Animated.Value(0)).current;
-  const successRippleScale = useRef(new Animated.Value(0.7)).current;
-  const successRippleOpacity = useRef(new Animated.Value(0)).current;
-  const noticeOpacity = useRef(new Animated.Value(0)).current;
-  const noticeTranslateY = useRef(new Animated.Value(-6)).current;
-  const noticeTimeoutRef = useRef(null);
-  const lastWsStatusRef = useRef('disconnected');
   // WebView load state
   const webViewReadyRef = useRef(false);
   const lastMapDataRef = useRef(null);
 
-  const pushConnectionNotice = useCallback((message, tone = 'neutral') => {
-    setConnectionNotice({
-      key: Date.now(),
-      message,
-      tone,
-    });
-  }, []);
-
-  const fetchSessionSnapshot = useCallback(async (targetSessionId = sessionId) => {
-    if (!targetSessionId) return;
-
-    try {
-      setIsRefreshingSnapshot(true);
-      const response = await client.get(`/sessions/${targetSessionId}/snapshot`);
-      const locations = response?.data?.locations || {};
-
-      const peerEntry = Object.entries(locations).find(([uid]) => uid !== String(user?.id));
-      if (peerEntry && peerEntry[1]) {
-        const payload = peerEntry[1];
-        const mapped = {
-          user_id: peerEntry[0],
-          lat: payload.lat,
-          lon: payload.lon,
-          accuracy_m: payload.accuracy_m,
-          timestamp: payload.timestamp,
-          receivedAt: new Date(payload.timestamp || Date.now()),
-        };
-        setPeerLocation(mapped);
-        setPeerLastSeenText('Just now');
-        setPeerIsStale(false);
-        setPeerLocationExpired(false);
-      }
-    } catch (error) {
-      DEBUG && console.log('[ActiveSessionScreen] Snapshot refresh skipped:', error?.message || error);
-    } finally {
-      setIsRefreshingSnapshot(false);
-    }
-  }, [sessionId, user?.id]);
+  // Flow State
+  const [meetingSuccess, setMeetingSuccess] = useState(false);
+  const successPulse = useRef(new Animated.Value(1)).current;
+  const [isConfirmingArrival, setIsConfirmingArrival] = useState(false);
+  const [arrivalCountdown, setArrivalCountdown] = useState(60);
+  const arrivalTimerRef = useRef(null);
 
   /**
    * Initialize session and start services
@@ -189,40 +119,13 @@ const ActiveSessionScreen = ({ route, navigation }) => {
         setSessionId(activeSessionId);
         DEBUG && console.log('[ActiveSessionScreen] Session ID:', activeSessionId);
 
-        if (inviteToken) {
+        if (inviteToken && activeSessionId) {
           try {
+            DEBUG && console.log('[ActiveSessionScreen] Redeeming invite token...');
             await client.post(`/sessions/${activeSessionId}/invite/redeem`, { token: inviteToken });
-            if (isMountedRef.current) {
-              setShowInviteJoined(true);
-              setInviteTokenIssue(false);
-            }
-            analyticsService.track('invite_token_redeemed', {
-              sessionId: activeSessionId,
-            });
-          } catch (error) {
-            const statusCode = error?.response?.status;
-
-            // If backend doesn't expose redeem yet, keep flow working without surfacing a warning.
-            if (statusCode === 404 || statusCode == null) {
-              analyticsService.track('invite_token_redeem_unavailable', {
-                sessionId: activeSessionId,
-                status: statusCode || null,
-              });
-              DEBUG && console.log('[ActiveSessionScreen] Invite redeem endpoint unavailable; continuing');
-            } else if (statusCode === 400 || statusCode === 401 || statusCode === 403 || statusCode === 410) {
-              if (isMountedRef.current) {
-                setInviteTokenIssue(true);
-              }
-              analyticsService.track('invite_token_redeem_invalid', {
-                sessionId: activeSessionId,
-                status: statusCode,
-              });
-            } else {
-              analyticsService.track('invite_token_redeem_failed', {
-                sessionId: activeSessionId,
-                status: statusCode || null,
-              });
-              DEBUG && console.log('[ActiveSessionScreen] Invite redeem non-blocking error:', error?.message || error);
+          } catch (err) {
+            if (err.response?.status !== 400 && err.response?.data?.status !== 'already_joined') {
+              console.warn('Invite token redeem failed: ', err.response?.data);
             }
           }
         }
@@ -241,23 +144,6 @@ const ActiveSessionScreen = ({ route, navigation }) => {
           setMyLocation(location);
         });
 
-        const unsubscribes = [
-          locationService.on('trackingPaused', () => {
-            if (!isMountedRef.current) return;
-            setIsLocationPaused(true);
-          }),
-          locationService.on('trackingResumed', () => {
-            if (!isMountedRef.current) return;
-            setIsLocationPaused(false);
-            fetchSessionSnapshot(activeSessionId);
-          }),
-          locationService.on('trackingStarted', () => {
-            if (!isMountedRef.current) return;
-            setIsLocationPaused(false);
-          }),
-        ];
-        locationEventUnsubscribesRef.current = unsubscribes;
-
         if (!trackingStarted) {
           throw new Error('Failed to start location tracking.');
         }
@@ -267,9 +153,6 @@ const ActiveSessionScreen = ({ route, navigation }) => {
         if (initialLocation) {
           setMyLocation(initialLocation);
         }
-
-        // 4b. Prime peer position from snapshot fallback (TTL-backed)
-        await fetchSessionSnapshot(activeSessionId);
 
         // 5. Connect WebSocket with real auth token
         DEBUG && console.log('[ActiveSessionScreen] Connecting WebSocket...');
@@ -313,7 +196,7 @@ const ActiveSessionScreen = ({ route, navigation }) => {
     return () => {
       // Cleanup will be called separately
     };
-  }, [fetchSessionSnapshot, inviteToken, routeSessionId]);
+  }, []);
 
   /**
    * Subscribe to WebSocket events
@@ -324,56 +207,19 @@ const ActiveSessionScreen = ({ route, navigation }) => {
     unsubscribes.onConnected = realtimeService.on('connected', () => {
       DEBUG && console.log('[ActiveSessionScreen] WebSocket connected');
       if (!isMountedRef.current) return;
-      const prevStatus = lastWsStatusRef.current;
       setWsStatus('connected');
       setWsError(null);
       setReconnectCountdown(0);
-      setReconnectAttempt(0);
-      lastWsStatusRef.current = 'connected';
-
-      if (prevStatus !== 'connected') {
-        pushConnectionNotice('Connection restored. Syncing latest positions...', 'success');
-        fetchSessionSnapshot();
-      }
     });
 
     unsubscribes.onStatusChange = realtimeService.on('statusChange', (data) => {
       DEBUG && console.log('[ActiveSessionScreen] WS status changed:', data.status);
       if (!isMountedRef.current) return;
-      const nextStatus = data.status;
-      const prevStatus = lastWsStatusRef.current;
+      setWsStatus(data.status);
 
-      setWsStatus(nextStatus);
-
-      if ((nextStatus === 'reconnecting' || nextStatus === 'grace') && data.nextRetryIn) {
+      if (data.status === 'reconnecting' && data.nextRetryIn) {
         setReconnectCountdown(Math.ceil(data.nextRetryIn / 1000));
       }
-
-      if (nextStatus === 'grace' && prevStatus !== 'grace') {
-        pushConnectionNotice('Network interrupted. Holding session in grace mode...', 'warning');
-      }
-
-      if (nextStatus === 'reconnecting') {
-        setReconnectAttempt((prev) => {
-          if (typeof data.attempt === 'number' && data.attempt > 0) {
-            return data.attempt;
-          }
-          return prev + 1;
-        });
-        if (prevStatus !== 'reconnecting') {
-          pushConnectionNotice('Attempting to reconnect to live updates...', 'warning');
-        }
-      }
-
-      if (nextStatus === 'connected') {
-        setReconnectAttempt(0);
-        if (prevStatus !== 'connected') {
-          pushConnectionNotice('Back online. Sync complete.', 'success');
-          fetchSessionSnapshot();
-        }
-      }
-
-      lastWsStatusRef.current = nextStatus;
     });
 
     unsubscribes.onPeerLocation = realtimeService.on('peerLocation', (payload) => {
@@ -408,21 +254,22 @@ const ActiveSessionScreen = ({ route, navigation }) => {
       DEBUG && console.log('[ActiveSessionScreen] Session ended:', payload.reason);
       if (!isMountedRef.current) return;
 
-      if (payload.reason === 'PROXIMITY_REACHED') {
-        setIAmHereWaiting(false);
-        if (iAmHereWaitingTimeoutRef.current) {
-          clearTimeout(iAmHereWaitingTimeoutRef.current);
-          iAmHereWaitingTimeoutRef.current = null;
-        }
-        setShowMeetingDetected(true);
+      if (payload.reason === 'PROXIMITY_MET' || payload.reason === 'MANUAL_MEET') {
+        if (arrivalTimerRef.current) clearInterval(arrivalTimerRef.current);
+        setIsConfirmingArrival(false);
+        setMeetingSuccess(true);
+        
+        Animated.loop(
+          Animated.sequence([
+            Animated.timing(successPulse, { toValue: 1.05, duration: 600, useNativeDriver: true }),
+            Animated.timing(successPulse, { toValue: 1, duration: 600, useNativeDriver: true })
+          ])
+        ).start();
+
         setTimeout(() => {
-          if (!isMountedRef.current) return;
           _cleanup();
-          navigation.reset({
-            index: 0,
-            routes: [{ name: 'Home' }],
-          });
-        }, 1800);
+          navigation.reset({ index: 0, routes: [{ name: 'Home' }] });
+        }, 5000); // give them 5 seconds to enjoy the success screen
         return;
       }
 
@@ -454,13 +301,13 @@ const ActiveSessionScreen = ({ route, navigation }) => {
     });
 
     wsEventUnsubscribesRef.current = unsubscribes;
-  }, [fetchSessionSnapshot, pushConnectionNotice]);
+  }, []);
 
   /**
    * Location streaming loop
    */
   useEffect(() => {
-    if (!myLocation || wsStatus !== 'connected' || isLocationPaused) return;
+    if (!myLocation || wsStatus !== 'connected') return;
 
     DEBUG && console.log('[ActiveSessionScreen] Starting location streaming');
 
@@ -484,7 +331,7 @@ const ActiveSessionScreen = ({ route, navigation }) => {
         clearInterval(locationIntervalRef.current);
       }
     };
-  }, [isLocationPaused, myLocation, wsStatus]);
+  }, [myLocation, wsStatus]);
 
   /**
    * Helper to safely inject map data into WebView
@@ -573,9 +420,8 @@ const ActiveSessionScreen = ({ route, navigation }) => {
         setPeerLastSeenText(`${Math.floor(diffSeconds / 60)}m ago`);
       }
 
-      // Week 4: stale and expiry signal (TTL store target is 120s)
-      setPeerIsStale(diffSeconds > 15);
-      setPeerLocationExpired(diffSeconds > 120);
+      // Show warning if stale (>5 seconds)
+      setPeerIsStale(diffSeconds > 5);
     }, 1000);
 
     return () => {
@@ -613,265 +459,6 @@ const ActiveSessionScreen = ({ route, navigation }) => {
       }
     };
   }, [reconnectCountdown]);
-
-  useEffect(() => {
-    if (!connectionNotice) return;
-
-    if (noticeTimeoutRef.current) {
-      clearTimeout(noticeTimeoutRef.current);
-      noticeTimeoutRef.current = null;
-    }
-
-    noticeOpacity.setValue(0);
-    noticeTranslateY.setValue(-6);
-
-    Animated.parallel([
-      Animated.timing(noticeOpacity, {
-        toValue: 1,
-        duration: 180,
-        easing: Easing.out(Easing.quad),
-        useNativeDriver: true,
-      }),
-      Animated.timing(noticeTranslateY, {
-        toValue: 0,
-        duration: 220,
-        easing: Easing.out(Easing.quad),
-        useNativeDriver: true,
-      }),
-    ]).start();
-
-    noticeTimeoutRef.current = setTimeout(() => {
-      Animated.parallel([
-        Animated.timing(noticeOpacity, {
-          toValue: 0,
-          duration: 220,
-          easing: Easing.in(Easing.quad),
-          useNativeDriver: true,
-        }),
-        Animated.timing(noticeTranslateY, {
-          toValue: -6,
-          duration: 220,
-          easing: Easing.in(Easing.quad),
-          useNativeDriver: true,
-        }),
-      ]).start(() => {
-        if (!isMountedRef.current) return;
-        setConnectionNotice((current) => (current?.key === connectionNotice.key ? null : current));
-      });
-    }, 2400);
-
-    return () => {
-      if (noticeTimeoutRef.current) {
-        clearTimeout(noticeTimeoutRef.current);
-        noticeTimeoutRef.current = null;
-      }
-    };
-  }, [connectionNotice, noticeOpacity, noticeTranslateY]);
-
-  useEffect(() => {
-    iAmHereWaitingStateRef.current = iAmHereWaiting;
-  }, [iAmHereWaiting]);
-
-  useEffect(() => {
-    if (!showInviteJoined) return;
-    const t = setTimeout(() => setShowInviteJoined(false), 2600);
-    return () => clearTimeout(t);
-  }, [showInviteJoined]);
-
-  useEffect(() => {
-    if (!canConfirmArrival || iAmHereWaiting) {
-      iAmHerePulse.setValue(1);
-      return;
-    }
-
-    const pulse = Animated.loop(
-      Animated.sequence([
-        Animated.timing(iAmHerePulse, {
-          toValue: 1.03,
-          duration: 680,
-          easing: Easing.inOut(Easing.quad),
-          useNativeDriver: true,
-        }),
-        Animated.timing(iAmHerePulse, {
-          toValue: 1,
-          duration: 680,
-          easing: Easing.inOut(Easing.quad),
-          useNativeDriver: true,
-        }),
-      ])
-    );
-    pulse.start();
-    return () => pulse.stop();
-  }, [canConfirmArrival, iAmHerePulse, iAmHereWaiting]);
-
-  useEffect(() => {
-    if (!showMeetingDetected) {
-      successScale.setValue(0.94);
-      successOpacity.setValue(0);
-      successRippleScale.setValue(0.7);
-      successRippleOpacity.setValue(0);
-      return;
-    }
-
-    Animated.parallel([
-      Animated.spring(successScale, {
-        toValue: 1,
-        stiffness: 220,
-        damping: 20,
-        mass: 1,
-        useNativeDriver: true,
-      }),
-      Animated.timing(successOpacity, {
-        toValue: 1,
-        duration: 220,
-        easing: Easing.out(Easing.quad),
-        useNativeDriver: true,
-      }),
-      Animated.sequence([
-        Animated.timing(successRippleOpacity, {
-          toValue: 0.25,
-          duration: 120,
-          easing: Easing.out(Easing.quad),
-          useNativeDriver: true,
-        }),
-        Animated.parallel([
-          Animated.timing(successRippleScale, {
-            toValue: 1.7,
-            duration: 540,
-            easing: Easing.out(Easing.cubic),
-            useNativeDriver: true,
-          }),
-          Animated.timing(successRippleOpacity, {
-            toValue: 0,
-            duration: 540,
-            easing: Easing.out(Easing.cubic),
-            useNativeDriver: true,
-          }),
-        ]),
-      ]),
-    ]).start();
-  }, [showMeetingDetected, successOpacity, successRippleOpacity, successRippleScale, successScale]);
-
-  const submitImHere = useCallback(async (trigger = 'manual') => {
-    if (!sessionId || isSubmittingIAmHere) return;
-
-    const now = Date.now();
-    if (now - lastImHereSubmitRef.current < 15000) {
-      DEBUG && console.log('[ActiveSessionScreen] im_here deduped within 15s window');
-      return;
-    }
-
-    lastImHereSubmitRef.current = now;
-    setIsSubmittingIAmHere(true);
-
-    let wsSent = false;
-    let apiSent = false;
-
-    try {
-      wsSent = realtimeService.sendImHere();
-
-      // Optional backend endpoint; safe fallback when not yet implemented.
-      try {
-        await client.post(`/sessions/${sessionId}/im-here`, {
-          timestamp: new Date().toISOString(),
-          source: trigger,
-        });
-        apiSent = true;
-      } catch (_) {
-        apiSent = false;
-      }
-
-      setIsIAmHereOpen(false);
-      setIAmHereWaiting(true);
-
-      if (iAmHereWaitingTimeoutRef.current) {
-        clearTimeout(iAmHereWaitingTimeoutRef.current);
-      }
-
-      iAmHereWaitingTimeoutRef.current = setTimeout(() => {
-        if (!isMountedRef.current) return;
-        if (iAmHereWaitingStateRef.current) {
-          Alert.alert('Still waiting', 'Your peer has not confirmed yet. You can try again.');
-          setIAmHereWaiting(false);
-        }
-      }, 65000);
-
-      if (!wsSent && !apiSent) {
-        Alert.alert('Connection unstable', 'We queued your confirmation and will retry when connected.');
-      }
-    } catch (error) {
-      console.error('[ActiveSessionScreen] submit im_here failed:', error);
-      Alert.alert('Could not confirm', 'Please try again in a moment.');
-      setIAmHereWaiting(false);
-    } finally {
-      setIsSubmittingIAmHere(false);
-    }
-  }, [isSubmittingIAmHere, sessionId]);
-
-  useEffect(() => {
-    if (!isIAmHereOpen) {
-      if (iAmHereTimerRef.current) {
-        clearInterval(iAmHereTimerRef.current);
-        iAmHereTimerRef.current = null;
-      }
-      return;
-    }
-
-    setIAmHereCountdown(60);
-    iAmHereTimerRef.current = setInterval(() => {
-      setIAmHereCountdown((prev) => {
-        if (prev <= 1) {
-          clearInterval(iAmHereTimerRef.current);
-          iAmHereTimerRef.current = null;
-          submitImHere('timer');
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-
-    return () => {
-      if (iAmHereTimerRef.current) {
-        clearInterval(iAmHereTimerRef.current);
-        iAmHereTimerRef.current = null;
-      }
-    };
-  }, [isIAmHereOpen, submitImHere]);
-
-  const handleIAmHere = useCallback(() => {
-    if (isIAmHereOpen || isSubmittingIAmHere) return;
-    if (!canConfirmArrival) {
-      Alert.alert('Not close enough yet', 'Move within 50 meters to confirm arrival.');
-      return;
-    }
-    if (iAmHereWaiting) {
-      Alert.alert('Already confirmed', 'You already confirmed arrival. Waiting for your peer.');
-      return;
-    }
-    setIAmHereWaiting(false);
-    setIAmHereCountdown(60);
-    setIsIAmHereOpen(true);
-  }, [canConfirmArrival, iAmHereWaiting, isIAmHereOpen, isSubmittingIAmHere]);
-
-  const handleToggleSharing = useCallback(async () => {
-    try {
-      if (isLocationPaused) {
-        await locationService.resumeTracking('user_privacy_resume');
-        setIsLocationPaused(false);
-        await fetchSessionSnapshot(sessionId);
-      } else {
-        locationService.pauseTracking('user_privacy_pause');
-        setIsLocationPaused(true);
-      }
-    } catch (error) {
-      console.error('[ActiveSessionScreen] Toggle sharing failed:', error);
-      Alert.alert('Action failed', 'Could not update location sharing right now.');
-    }
-  }, [fetchSessionSnapshot, isLocationPaused, sessionId]);
-
-  const handleRefreshSnapshot = useCallback(async () => {
-    await fetchSessionSnapshot(sessionId);
-  }, [fetchSessionSnapshot, sessionId]);
 
   /**
    * Handle end session
@@ -915,56 +502,38 @@ const ActiveSessionScreen = ({ route, navigation }) => {
     );
   }, [sessionId, navigation]);
 
-  const handleShareInvite = useCallback(async () => {
-    if (!sessionId) {
-      Alert.alert('Session not ready', 'Please wait for the session to initialize.');
-      return;
-    }
-
+  const handleImHere = useCallback(async () => {
     try {
-      setIsSharingInvite(true);
-      analyticsService.track('invite_share_started', { sessionId });
-
-      let inviteToken = null;
-      try {
-        // Optional backend support; gracefully falls back when endpoint is unavailable.
-        const res = await client.post(`/sessions/${sessionId}/invite`);
-        inviteToken = res?.data?.invite_token || null;
-        analyticsService.track('invite_token_created', {
-          sessionId,
-          hasToken: Boolean(inviteToken),
+      setIsConfirmingArrival(true);
+      setArrivalCountdown(60);
+      
+      // Fire through realtime WS layer
+      realtimeService.sendImHere();
+      
+      // Fire fallback HTTP endpoint
+      if (sessionId) {
+        client.post(`/sessions/${sessionId}/im-here`).catch(err => {
+          console.error('[ActiveSessionScreen] Failed fallback im-here:', err);
         });
-      } catch (_) {
-        inviteToken = null;
-        analyticsService.track('invite_token_create_unavailable', { sessionId });
       }
 
-      const url = Linking.createURL(`session/${sessionId}`, {
-        queryParams: inviteToken ? { token: inviteToken } : undefined,
-      });
-
-      const inviterName = user?.user_metadata?.display_name || user?.email || 'Your friend';
-      const message = [
-        `${inviterName} invited you to a MeetUp session.`,
-        `Open in app: ${url}`,
-        `WhatsApp quick-share: https://wa.me/?text=${encodeURIComponent(url)}`,
-      ].join('\n');
-      await Share.share({ message, url, title: 'MeetUp Invite' });
-      analyticsService.track('invite_shared', {
-        sessionId,
-        hasToken: Boolean(inviteToken),
-      });
-    } catch (error) {
-      analyticsService.track('invite_share_failed', {
-        sessionId,
-        message: error?.message || 'unknown',
-      });
-      console.error('[ActiveSessionScreen] Share invite error:', error);
-      Alert.alert('Share failed', 'Could not create invite link right now.');
-    } finally {
-      setIsSharingInvite(false);
+      if (arrivalTimerRef.current) clearInterval(arrivalTimerRef.current);
+      arrivalTimerRef.current = setInterval(() => {
+        setArrivalCountdown(prev => {
+          if (prev <= 1) {
+            clearInterval(arrivalTimerRef.current);
+            setIsConfirmingArrival(false);
+            Alert.alert('Timeout', 'The other person did not confirm arrival. Please try again.');
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+    } catch (err) {
+      setIsConfirmingArrival(false);
+      Alert.alert('Error', 'Failed to confirm arrival');
     }
-  }, [sessionId, user?.email, user?.user_metadata?.display_name]);
+  }, [sessionId]);
 
   /**
    * Cleanup all resources
@@ -977,14 +546,6 @@ const ActiveSessionScreen = ({ route, navigation }) => {
     if (locationUnsubscribeRef.current) {
       locationUnsubscribeRef.current();
     }
-    locationEventUnsubscribesRef.current.forEach((unsub) => {
-      try {
-        unsub?.();
-      } catch (e) {
-        console.error('Error unsubscribing location events:', e);
-      }
-    });
-    locationEventUnsubscribesRef.current = [];
 
     // Clear intervals
     if (locationIntervalRef.current) {
@@ -996,17 +557,8 @@ const ActiveSessionScreen = ({ route, navigation }) => {
     if (countdownIntervalRef.current) {
       clearInterval(countdownIntervalRef.current);
     }
-    if (iAmHereTimerRef.current) {
-      clearInterval(iAmHereTimerRef.current);
-      iAmHereTimerRef.current = null;
-    }
-    if (iAmHereWaitingTimeoutRef.current) {
-      clearTimeout(iAmHereWaitingTimeoutRef.current);
-      iAmHereWaitingTimeoutRef.current = null;
-    }
-    if (noticeTimeoutRef.current) {
-      clearTimeout(noticeTimeoutRef.current);
-      noticeTimeoutRef.current = null;
+    if (arrivalTimerRef.current) {
+      clearInterval(arrivalTimerRef.current);
     }
 
     // Unsubscribe from WS events
@@ -1162,14 +714,10 @@ const ActiveSessionScreen = ({ route, navigation }) => {
         )}
       />
 
-      <View pointerEvents="none" style={s.ambientOrbTop} />
-      <View pointerEvents="none" style={s.ambientOrbBottom} />
-
       {/* Status Badge */}
       <View style={[
         s.statusBadge,
         wsStatus === 'connected' && s.statusConnected,
-        wsStatus === 'grace' && s.statusGrace,
         wsStatus === 'reconnecting' && s.statusReconnecting,
         wsStatus === 'failed' && s.statusFailed,
         wsStatus === 'disconnected' && s.statusDisconnected,
@@ -1177,42 +725,17 @@ const ActiveSessionScreen = ({ route, navigation }) => {
         <View style={[
           s.statusDot,
           wsStatus === 'connected' && s.dotGreen,
-          wsStatus === 'grace' && s.dotOrange,
           wsStatus === 'reconnecting' && s.dotOrange,
           wsStatus === 'failed' && s.dotRed,
           wsStatus === 'disconnected' && s.dotGray,
         ]} />
         <Text style={s.statusText}>
           {wsStatus === 'connected' ? 'Live'
-            : wsStatus === 'grace' ? `Connection lost, retry in ${reconnectCountdown}s`
-            : wsStatus === 'reconnecting'
-              ? `Reconnecting${reconnectAttempt > 0 ? ` (attempt ${reconnectAttempt})` : ''}${reconnectCountdown > 0 ? ` in ${reconnectCountdown}s` : '...'}`
+            : wsStatus === 'reconnecting' ? `Reconnecting ${reconnectCountdown}s`
               : wsStatus === 'failed' ? 'Disconnected'
                 : 'Offline'}
         </Text>
       </View>
-
-      {connectionNotice && (
-        <Animated.View
-          style={[
-            s.connectionNotice,
-            connectionNotice.tone === 'success' && s.connectionNoticeSuccess,
-            connectionNotice.tone === 'warning' && s.connectionNoticeWarning,
-            {
-              opacity: noticeOpacity,
-              transform: [{ translateY: noticeTranslateY }],
-            },
-          ]}>
-          <Text
-            style={[
-              s.connectionNoticeText,
-              connectionNotice.tone === 'success' && s.connectionNoticeTextSuccess,
-              connectionNotice.tone === 'warning' && s.connectionNoticeTextWarning,
-            ]}>
-            {connectionNotice.message}
-          </Text>
-        </Animated.View>
-      )}
 
       {/* Error Banner */}
       {(locationError || wsError) && (
@@ -1221,94 +744,19 @@ const ActiveSessionScreen = ({ route, navigation }) => {
         </View>
       )}
 
-      {isLocationPaused && (
-        <View style={s.pauseBanner}>
-          <Text style={s.pauseText}>Location sharing paused. Resume to share your live position.</Text>
-        </View>
-      )}
-
-      {peerLocationExpired && !isLocationPaused && (
-        <View style={s.staleBanner}>
-          <Text style={s.staleText}>Peer location is stale or expired. Pulling latest snapshot...</Text>
-        </View>
-      )}
-
-      {showMeetingDetected && (
-        <>
-          <Animated.View
-            pointerEvents="none"
-            style={[
-              s.successHalo,
-              { opacity: successRippleOpacity, transform: [{ scale: successRippleScale }] },
-            ]}
-          />
-          <Animated.View style={[s.successBanner, { opacity: successOpacity, transform: [{ scale: successScale }] }]}> 
-            <Text style={s.successTitle}>Meeting detected</Text>
-            <Text style={s.successText}>Great timing. Closing session now.</Text>
-          </Animated.View>
-        </>
-      )}
-
-      {showInviteJoined && (
-        <View style={s.inviteBanner}>
-          <Text style={s.inviteBannerTitle}>Invite link accepted</Text>
-          <Text style={s.inviteBannerText}>You joined this session from a shared invite.</Text>
-        </View>
-      )}
-
-      {inviteTokenIssue && (
-        <View style={s.inviteWarningBanner}>
-          <Text style={s.inviteWarningTitle}>Invite token issue</Text>
-          <Text style={s.inviteWarningText}>This invite link may be expired, but session access is still available.</Text>
-        </View>
-      )}
-
       {/* Bottom Panel */}
       <View style={s.bottomPanel}>
-        <View style={s.panelHandle} />
         <View style={s.infoRow}>
           <View style={s.peerInfo}>
             <Text style={s.peerName}>{peerName}</Text>
-            <Text style={[s.peerSub, peerIsStale && s.peerSubStale]}>
-              {peerLocation
-                ? `Last seen: ${peerLastSeenText}${peerLocationExpired ? ' (expired)' : peerIsStale ? ' (stale)' : ''}`
-                : 'Waiting for location...'}
+            <Text style={s.peerSub}>
+              {peerLocation ? `Last seen: ${peerLastSeenText}` : 'Waiting for location...'}
             </Text>
           </View>
           {routeDistance != null && (
-            <View style={s.distanceBadge}>
-              <Text style={s.distanceValue}>{formatDistance(routeDistance)}</Text>
-              {routeDuration != null && (
-                <Text style={s.etaValue}>{formatDuration(routeDuration)} away</Text>
-              )}
-            </View>
+            <ModernDistanceBar distanceM={routeDistance} maxDistanceM={500} colors={colors} />
           )}
         </View>
-
-        <ModernDistanceBar distanceM={directDistanceM} colors={colors} />
-
-        <View style={s.privacyRow}>
-          <TouchableOpacity
-            style={[s.privacyButton, isLocationPaused && s.privacyButtonActive]}
-            onPress={handleToggleSharing}>
-            <Text style={[s.privacyButtonText, isLocationPaused && s.privacyButtonTextActive]}>
-              {isLocationPaused ? 'Resume Sharing' : 'Pause Sharing'}
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[s.privacyButtonSecondary, isRefreshingSnapshot && s.buttonDisabled]}
-            onPress={handleRefreshSnapshot}
-            disabled={isRefreshingSnapshot}>
-            <Text style={s.privacyButtonSecondaryText}>{isRefreshingSnapshot ? 'Refreshing...' : 'Refresh Snapshot'}</Text>
-          </TouchableOpacity>
-        </View>
-
-        {iAmHereWaiting && (
-          <View style={s.waitingBanner}>
-            <Text style={s.waitingBannerText}>Arrival confirmed. Waiting for your peer...</Text>
-          </View>
-        )}
 
         {peerLocation && (
           <View style={s.modeTabs}>
@@ -1321,62 +769,51 @@ const ActiveSessionScreen = ({ route, navigation }) => {
                   {mode.label}
                 </Text>
                 {routeLoading && selectedMode === mode.id && (
-                  <ActivityIndicator size="small" color={colors.textSecondary} style={s.modeLoadingSpinner} />
+                  <ActivityIndicator size="small" color={colors.textSecondary} style={{ marginLeft: 4 }} />
                 )}
               </TouchableOpacity>
             ))}
           </View>
         )}
 
-        <View style={s.actionRow}>
-          <TouchableOpacity
-            style={[s.shareButton, isSharingInvite && s.buttonDisabled]}
-            onPress={handleShareInvite}
-            disabled={isSharingInvite}>
-            <Text style={s.shareButtonText}>{isSharingInvite ? 'Sharing...' : 'Share'}</Text>
+        {routeDistance != null && routeDistance <= 50 && (
+          <TouchableOpacity style={s.imHereButton} onPress={handleImHere}>
+            <Text style={s.imHereText}>I'm Here!</Text>
           </TouchableOpacity>
+        )}
 
-          <Animated.View style={[s.iAmHereAnimatedWrap, { transform: [{ scale: iAmHerePulse }] }]}> 
-            <TouchableOpacity
-              style={[
-                s.iAmHereButton,
-                !canConfirmArrival && s.iAmHereButtonDisabled,
-                iAmHereWaiting && s.iAmHereButtonWaiting,
-              ]}
-              onPress={handleIAmHere}
-              disabled={!canConfirmArrival || iAmHereWaiting}>
-              <Text style={[s.iAmHereText, !canConfirmArrival && s.iAmHereTextDisabled]}>
-                {iAmHereWaiting ? 'Waiting for peer...' : "I'm Here"}
-              </Text>
-            </TouchableOpacity>
-          </Animated.View>
-
-          <TouchableOpacity
-            style={[s.endSessionButton, isStopping && s.buttonDisabled]}
-            onPress={handleEndSession} disabled={isStopping}>
-            <Text style={s.endSessionText}>{isStopping ? 'Ending...' : 'End Session'}</Text>
-          </TouchableOpacity>
-        </View>
+        <TouchableOpacity
+          style={[s.endSessionButton, isStopping && s.buttonDisabled]}
+          onPress={handleEndSession} disabled={isStopping}>
+          <Text style={s.endSessionText}>{isStopping ? 'Ending...' : 'End Session'}</Text>
+        </TouchableOpacity>
       </View>
 
-      <Modal visible={isIAmHereOpen} transparent animationType="fade" onRequestClose={() => setIsIAmHereOpen(false)}>
-        <View style={s.modalBackdrop}>
+      {/* Confirmation Modal */}
+      <Modal visible={isConfirmingArrival} transparent animationType="fade">
+        <View style={s.modalOverlay}>
           <View style={s.modalCard}>
-            <Text style={s.modalTitle}>Confirm Arrival</Text>
-            <Text style={s.modalBody}>Keep this open and tap confirm after the countdown.</Text>
-            <Text style={s.modalCountdown}>{iAmHereCountdown}s</Text>
-
-            <TouchableOpacity
-              style={[s.modalConfirm, isSubmittingIAmHere && s.buttonDisabled]}
-              onPress={() => submitImHere('manual')}
-              disabled={isSubmittingIAmHere}>
-              <Text style={s.modalConfirmText}>{isSubmittingIAmHere ? 'Submitting...' : 'Confirm Now'}</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity style={s.modalCancel} onPress={() => setIsIAmHereOpen(false)}>
-              <Text style={s.modalCancelText}>Cancel</Text>
+            <ActivityIndicator size="large" color={colors.primary} style={{ marginBottom: 16 }} />
+            <Text style={s.modalTitle}>Waiting for peer...</Text>
+            <Text style={s.modalText}>They have {arrivalCountdown}s to confirm</Text>
+            <TouchableOpacity style={s.cancelButton} onPress={() => {
+              if (arrivalTimerRef.current) clearInterval(arrivalTimerRef.current);
+              setIsConfirmingArrival(false);
+            }}>
+              <Text style={s.cancelText}>Cancel</Text>
             </TouchableOpacity>
           </View>
+        </View>
+      </Modal>
+
+      {/* Success Modal */}
+      <Modal visible={meetingSuccess} transparent animationType="fade">
+        <View style={s.modalOverlay}>
+          <Animated.View style={[s.successCard, { transform: [{ scale: successPulse }] }]}>
+            <Text style={s.successEmoji}>🎉</Text>
+            <Text style={s.successTitle}>Meeting Detected!</Text>
+            <Text style={s.successText}>You've arrived securely.</Text>
+          </Animated.View>
         </View>
       </Modal>
     </SafeAreaView>
@@ -1394,14 +831,8 @@ const makeStyles = (c) => StyleSheet.create({
     paddingHorizontal: 12, paddingVertical: 8,
     borderRadius: 20, flexDirection: 'row', alignItems: 'center',
     backgroundColor: c.cardBg, borderWidth: 1, borderColor: c.border,
-    shadowColor: c.textPrimary,
-    shadowOpacity: 0.12,
-    shadowOffset: { width: 0, height: 6 },
-    shadowRadius: 10,
-    elevation: 3,
   },
   statusConnected: {},
-  statusGrace: { borderColor: c.warning },
   statusReconnecting: { borderColor: c.warning },
   statusFailed: { borderColor: c.accent },
   statusDisconnected: {},
@@ -1412,161 +843,12 @@ const makeStyles = (c) => StyleSheet.create({
   dotGray: { backgroundColor: c.textMuted },
   statusText: { fontSize: 12, fontWeight: '600', color: c.textPrimary },
 
-  connectionNotice: {
-    position: 'absolute',
-    top: 62,
-    left: 16,
-    right: 16,
-    borderWidth: 1,
-    borderColor: c.border,
-    backgroundColor: c.surfaceGlass,
-    borderRadius: Radius.md,
-    paddingHorizontal: 12,
-    paddingVertical: 9,
-    shadowColor: c.textPrimary,
-    shadowOpacity: 0.09,
-    shadowOffset: { width: 0, height: 6 },
-    shadowRadius: 10,
-    elevation: 3,
-  },
-  connectionNoticeSuccess: {
-    borderColor: c.online,
-    backgroundColor: c.onlineBg,
-  },
-  connectionNoticeWarning: {
-    borderColor: c.warning,
-    backgroundColor: c.warningBg,
-  },
-  connectionNoticeText: {
-    color: c.textSecondary,
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  connectionNoticeTextSuccess: {
-    color: c.online,
-  },
-  connectionNoticeTextWarning: {
-    color: c.warning,
-  },
-
   errorBanner: {
     position: 'absolute', bottom: 130, left: 16, right: 16,
     backgroundColor: c.accentBg, padding: 12, borderRadius: Radius.sm,
     borderColor: c.accent, borderWidth: 1,
   },
   errorText: { color: c.accentLight, fontSize: 13, fontWeight: '500' },
-
-  pauseBanner: {
-    position: 'absolute', bottom: 182, left: 16, right: 16,
-    backgroundColor: c.warningBg, padding: 12, borderRadius: Radius.sm,
-    borderColor: c.warning, borderWidth: 1,
-  },
-  pauseText: { color: c.warning, fontSize: 13, fontWeight: '600' },
-  staleBanner: {
-    position: 'absolute',
-    bottom: 230,
-    left: 16,
-    right: 16,
-    borderWidth: 1,
-    borderColor: c.warning,
-    backgroundColor: c.warningBg,
-    borderRadius: Radius.sm,
-    paddingHorizontal: 12,
-    paddingVertical: 9,
-  },
-  staleText: {
-    color: c.warning,
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  successBanner: {
-    position: 'absolute',
-    top: 64,
-    left: 16,
-    right: 16,
-    borderWidth: 1,
-    borderColor: c.online,
-    backgroundColor: c.onlineBg,
-    borderRadius: Radius.md,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-  },
-  successHalo: {
-    position: 'absolute',
-    top: 54,
-    alignSelf: 'center',
-    width: 180,
-    height: 70,
-    borderRadius: 35,
-    backgroundColor: c.onlineBg,
-    borderWidth: 1,
-    borderColor: c.online,
-  },
-  successTitle: {
-    color: c.online,
-    fontSize: 14,
-    fontWeight: '800',
-    letterSpacing: 0.2,
-  },
-  successText: {
-    marginTop: 4,
-    color: c.online,
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  inviteBanner: {
-    position: 'absolute',
-    top: 124,
-    left: 16,
-    right: 16,
-    borderWidth: 1,
-    borderColor: c.border,
-    backgroundColor: c.surfaceGlass,
-    borderRadius: Radius.md,
-    paddingHorizontal: 14,
-    paddingVertical: 11,
-    shadowColor: c.textPrimary,
-    shadowOpacity: 0.09,
-    shadowOffset: { width: 0, height: 6 },
-    shadowRadius: 10,
-    elevation: 3,
-  },
-  inviteBannerTitle: {
-    color: c.textPrimary,
-    fontSize: 13,
-    fontWeight: '800',
-    letterSpacing: 0.2,
-  },
-  inviteBannerText: {
-    marginTop: 3,
-    color: c.textSecondary,
-    fontSize: 12,
-    fontWeight: '500',
-  },
-  inviteWarningBanner: {
-    position: 'absolute',
-    top: 188,
-    left: 16,
-    right: 16,
-    borderWidth: 1,
-    borderColor: c.warning,
-    backgroundColor: c.warningBg,
-    borderRadius: Radius.md,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-  },
-  inviteWarningTitle: {
-    color: c.warning,
-    fontSize: 12,
-    fontWeight: '800',
-    letterSpacing: 0.2,
-  },
-  inviteWarningText: {
-    marginTop: 2,
-    color: c.warning,
-    fontSize: 11,
-    fontWeight: '600',
-  },
 
   bottomPanel: {
     backgroundColor: c.surface,
@@ -1578,7 +860,6 @@ const makeStyles = (c) => StyleSheet.create({
   peerInfo: { flex: 1 },
   peerName: { ...Font.subtitle, color: c.textPrimary },
   peerSub: { ...Font.caption, color: c.textMuted, marginTop: 3 },
-  peerSubStale: { color: c.warning, fontWeight: '700' },
   distanceBadge: { alignItems: 'flex-end' },
   distanceValue: { fontSize: 22, fontWeight: '800', color: c.textPrimary, letterSpacing: -0.5 },
   etaValue: { ...Font.caption, color: c.textMuted, marginTop: 2 },
@@ -1596,224 +877,37 @@ const makeStyles = (c) => StyleSheet.create({
   modeIcon: { fontSize: 14, marginRight: 5 },
   modeLabel: { ...Font.caption, color: c.textMuted },
   modeLabelActive: { color: c.textPrimary, fontWeight: '700' },
-  modeLoadingSpinner: { marginLeft: 4 },
 
   mapLoading: {
     ...StyleSheet.absoluteFillObject, justifyContent: 'center',
     alignItems: 'center', backgroundColor: c.bg,
   },
+  imHereButton: {
+    backgroundColor: c.primary,
+    borderRadius: Radius.md, paddingVertical: 14,
+    alignItems: 'center', justifyContent: 'center',
+    marginBottom: Spacing.sm, shadowColor: c.primary,
+    shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8, elevation: 4,
+  },
+  imHereText: { color: c.bg, fontSize: 16, fontWeight: '800' },
   endSessionButton: {
     borderWidth: 1, borderColor: c.accent,
     borderRadius: Radius.md, paddingVertical: 14,
     alignItems: 'center', justifyContent: 'center',
-    flex: 1,
-    marginLeft: 8,
-  },
-  actionRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  iAmHereButton: {
-    flex: 1,
-    borderWidth: 1,
-    borderColor: c.online,
-    borderRadius: Radius.md,
-    paddingVertical: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: c.onlineBg,
-    marginRight: 8,
-  },
-  iAmHereAnimatedWrap: {
-    flex: 1,
-  },
-  shareButton: {
-    borderWidth: 1,
-    borderColor: c.border,
-    backgroundColor: c.surfaceElevated,
-    borderRadius: Radius.md,
-    paddingVertical: 14,
-    paddingHorizontal: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 8,
-  },
-  shareButtonText: {
-    color: c.textPrimary,
-    fontSize: 14,
-    fontWeight: '700',
-    letterSpacing: 0.2,
-  },
-  iAmHereButtonDisabled: {
-    borderColor: c.borderLight,
-    backgroundColor: c.surfaceElevated,
-  },
-  iAmHereButtonWaiting: {
-    borderColor: c.warning,
-    backgroundColor: c.warningBg,
-  },
-  iAmHereText: {
-    color: c.online,
-    fontSize: 15,
-    fontWeight: '700',
-    letterSpacing: 0.3,
-  },
-  iAmHereTextDisabled: {
-    color: c.textMuted,
-  },
-  waitingBanner: {
-    borderWidth: 1,
-    borderColor: c.warning,
-    backgroundColor: c.warningBg,
-    borderRadius: Radius.sm,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    shadowColor: c.warning,
-    shadowOpacity: 0.1,
-    shadowOffset: { width: 0, height: 6 },
-    shadowRadius: 10,
-    elevation: 3,
-    marginBottom: Spacing.md,
-
-  ambientOrbTop: {
-    position: 'absolute',
-    top: 78,
-    right: -46,
-    width: 160,
-    height: 160,
-    borderRadius: 80,
-    backgroundColor: c.accentBg,
-    opacity: 0.45,
-  },
-  ambientOrbBottom: {
-    position: 'absolute',
-    bottom: 140,
-    left: -52,
-    width: 150,
-    height: 150,
-    borderRadius: 75,
-    backgroundColor: c.surfaceGlass,
-    opacity: 0.45,
-  },
-  },
-  waitingBannerText: {
-    backgroundColor: c.surface,
-    fontSize: 12,
-    fontWeight: '600',
-  },
-    shadowColor: c.textPrimary,
-    shadowOpacity: 0.12,
-    shadowOffset: { width: 0, height: -8 },
-    shadowRadius: 16,
-    elevation: 8,
-  privacyRow: {
-  panelHandle: {
-    alignSelf: 'center',
-    width: 42,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: c.borderLight,
-    marginBottom: 10,
-  },
-    flexDirection: 'row',
-    marginBottom: Spacing.md,
-  },
-  privacyButton: {
-    flex: 1,
-    borderWidth: 1,
-    borderColor: c.border,
-    borderRadius: Radius.sm,
-    backgroundColor: c.surfaceElevated,
-    paddingVertical: 11,
-    alignItems: 'center',
-    marginRight: 8,
-  },
-  privacyButtonActive: {
-    borderColor: c.warning,
-    backgroundColor: c.warningBg,
-  },
-  privacyButtonText: {
-    color: c.textPrimary,
-    fontSize: 12,
-    fontWeight: '700',
-    letterSpacing: 0.2,
-  },
-  privacyButtonTextActive: {
-    color: c.warning,
-  },
-  privacyButtonSecondary: {
-    flex: 1,
-    borderWidth: 1,
-    borderColor: c.border,
-    borderRadius: Radius.sm,
-    backgroundColor: c.surface,
-    paddingVertical: 11,
-    alignItems: 'center',
-  },
-  privacyButtonSecondaryText: {
-    color: c.textSecondary,
-    fontSize: 12,
-    fontWeight: '700',
-    letterSpacing: 0.2,
-  },
-  modalBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.45)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 24,
-  },
-  modalCard: {
-    width: '100%',
-    borderWidth: 1,
-    borderColor: c.border,
-    backgroundColor: c.surface,
-    borderRadius: Radius.lg,
-    padding: Spacing.lg,
-  },
-  modalTitle: {
-    ...Font.subtitle,
-    color: c.textPrimary,
-  },
-  modalBody: {
-    ...Font.body,
-    color: c.textSecondary,
-    marginTop: 6,
-  },
-  modalCountdown: {
-    ...Font.display,
-    color: c.textPrimary,
-    textAlign: 'center',
-    marginVertical: 16,
-  },
-  modalConfirm: {
-    borderWidth: 1,
-    borderColor: c.online,
-    borderRadius: Radius.sm,
-    paddingVertical: 12,
-    alignItems: 'center',
-    backgroundColor: c.onlineBg,
-    marginBottom: 8,
-  },
-  modalConfirmText: {
-    ...Font.body,
-    color: c.online,
-    fontWeight: '700',
-  },
-  modalCancel: {
-    borderWidth: 1,
-    borderColor: c.border,
-    borderRadius: Radius.sm,
-    paddingVertical: 12,
-    alignItems: 'center',
-  },
-  modalCancelText: {
-    ...Font.body,
-    color: c.textPrimary,
-    fontWeight: '600',
   },
   buttonDisabled: { opacity: 0.5 },
   endSessionText: { color: c.accent, fontSize: 15, fontWeight: '700', letterSpacing: 0.3 },
+  
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center' },
+  modalCard: { backgroundColor: c.surface, padding: 24, borderRadius: Radius.lg, width: '80%', alignItems: 'center' },
+  modalTitle: { ...Font.h3, color: c.textPrimary, marginBottom: 8 },
+  modalText: { ...Font.body, color: c.textSecondary, marginBottom: 24 },
+  cancelButton: { paddingVertical: 12, paddingHorizontal: 24, borderRadius: Radius.md, backgroundColor: c.borderLight },
+  cancelText: { color: c.textPrimary, fontWeight: '600' },
+  successCard: { backgroundColor: c.successBg || '#E6F4EA', padding: 32, borderRadius: Radius.xl, alignItems: 'center', borderWidth: 2, borderColor: c.success || '#34A853' },
+  successEmoji: { fontSize: 64, marginBottom: 16 },
+  successTitle: { fontSize: 24, fontWeight: '800', color: c.success || '#34A853', marginBottom: 8 },
+  successText: { fontSize: 16, color: c.textSecondary, fontWeight: '500' },
 });
 
 export default ActiveSessionScreen;

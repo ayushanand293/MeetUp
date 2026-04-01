@@ -371,3 +371,59 @@ def get_session_history(
             })
 
     return {"history": history}
+
+
+@router.post("/{session_id}/im-here")
+async def im_here_confirmation(
+    session_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user),
+):
+    """
+    Manual 'I'm Here' confirmation.
+    If both active participants call this within 60 seconds, the session ends.
+    """
+    session = db.query(MeetSession).filter(MeetSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+        
+    if session.status != SessionStatus.ACTIVE:
+        raise HTTPException(status_code=400, detail="Session is not active")
+
+    if not _is_participant(db, session_id, current_user.id):
+        raise HTTPException(status_code=403, detail="Not a participant")
+
+    redis_client = await get_redis()
+    
+    # Set my flag
+    im_here_key = f"im_here:{session_id}:{current_user.id}"
+    await redis_client.setex(im_here_key, 60, "1")
+
+    # Find peer
+    participants = db.query(SessionParticipant).filter(SessionParticipant.session_id == session_id).all()
+    peer = next((p for p in participants if p.user_id != current_user.id), None)
+
+    if peer:
+        peer_here = await redis_client.get(f"im_here:{session_id}:{peer.user_id}")
+        if peer_here:
+            # Both are here! End the session
+            session.status = SessionStatus.ENDED
+            session.end_reason = "MANUAL_CONFIRM"
+            session.ended_at = func.now()
+            db.commit()
+
+            # Broadcast to web socket to trigger UI
+            from app.realtime.connection_manager import manager
+            from app.realtime.schemas import SessionEndedEvent, SessionEndedPayload
+            
+            event = SessionEndedEvent(
+                payload=SessionEndedPayload(
+                    reason="MANUAL_CONFIRM",
+                    ended_at=datetime.utcnow()
+                )
+            )
+            await manager.broadcast(session_id, event.model_dump_json())
+
+            return {"status": "ended", "reason": "MANUAL_CONFIRM"}
+
+    return {"status": "waiting_for_peer", "message": "Waiting for peer to confirm"}
