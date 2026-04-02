@@ -91,7 +91,7 @@ class LocationService extends EventEmitter {
     const jitterLon = hasMock ? (Math.random() - 0.5) * 0.006 : 0;
 
     this.config = {
-      accuracy: Location.Accuracy.Balanced,
+      accuracy: Location.Accuracy.Highest,
       timeInterval: 2000,
       distanceInterval: 5,
       enableBackground: false,
