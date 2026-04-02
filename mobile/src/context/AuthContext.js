@@ -2,6 +2,7 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 import { supabase } from '../api/supabase';
 import * as Linking from 'expo-linking';
 import analyticsService from '../services/analyticsService';
+import { authEventEmitter } from '../api/client';
 
 // Create the Auth Context
 const AuthContext = createContext({});
@@ -21,6 +22,7 @@ export const AuthProvider = ({ children }) => {
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState(null);
   const [pendingNavigation, setPendingNavigation] = useState(null);
+  const [sessionInvalidatedElsewhere, setSessionInvalidatedElsewhere] = useState(false);
 
   useEffect(() => {
     // Get initial session
@@ -126,6 +128,21 @@ export const AuthProvider = ({ children }) => {
     return () => {
       subscription?.unsubscribe();
       linkingSubscription.remove();
+    };
+  }, []);
+
+  // Listen for session invalidation events (401 errors)
+  useEffect(() => {
+    const handleSessionInvalidated = () => {
+      setSessionInvalidatedElsewhere(true);
+      setSession(null);
+      setUser(null);
+    };
+
+    authEventEmitter.on('SESSION_INVALIDATED', handleSessionInvalidated);
+
+    return () => {
+      authEventEmitter.off('SESSION_INVALIDATED', handleSessionInvalidated);
     };
   }, []);
 
@@ -272,12 +289,18 @@ export const AuthProvider = ({ children }) => {
     return next;
   };
 
+  const clearSessionInvalidatedFlag = () => {
+    setSessionInvalidatedElsewhere(false);
+  };
+
   const value = {
     session,
     user,
     loading,
     pendingNavigation,
     consumePendingNavigation,
+    sessionInvalidatedElsewhere,
+    clearSessionInvalidatedFlag,
     signUpWithEmail,
     signInWithEmail,
     signInWithPhone,

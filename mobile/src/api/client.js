@@ -3,6 +3,37 @@ import { supabase } from './supabase';
 import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 
+// Simple custom event emitter for auth events
+class SimpleEventEmitter {
+    constructor() {
+        this.events = {};
+    }
+
+    on(event, listener) {
+        if (!this.events[event]) {
+            this.events[event] = [];
+        }
+        this.events[event].push(listener);
+    }
+
+    emit(event, ...args) {
+        if (this.events[event]) {
+            this.events[event].forEach(listener => {
+                listener(...args);
+            });
+        }
+    }
+
+    off(event, listenerToRemove) {
+        if (this.events[event]) {
+            this.events[event] = this.events[event].filter(listener => listener !== listenerToRemove);
+        }
+    }
+}
+
+// Create a global event emitter for auth events
+export const authEventEmitter = new SimpleEventEmitter();
+
 // Helper to get the correct backend URL dynamically
 const getBaseUrl = () => {
     // 1. If valid host URI (physical device or LAN), use that IP
@@ -41,6 +72,21 @@ client.interceptors.request.use(
         return config;
     },
     (error) => {
+        return Promise.reject(error);
+    }
+);
+
+// Response interceptor to handle 401 (session invalidated)
+client.interceptors.response.use(
+    (response) => response,
+    async (error) => {
+        if (error?.response?.status === 401) {
+            // Session has been invalidated (likely logged in elsewhere)
+            // Emit event so AuthContext can handle this
+            authEventEmitter.emit('SESSION_INVALIDATED');
+            // Sign out from Supabase
+            await supabase.auth.signOut({ scope: 'local' });
+        }
         return Promise.reject(error);
     }
 );

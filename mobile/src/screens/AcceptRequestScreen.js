@@ -28,7 +28,7 @@ const AcceptRequestScreen = ({ route, navigation }) => {
         }
         catch (err) {
             setLoadError('Could not refresh requests. Please retry.');
-            if (!silent) Alert.alert('Error', 'Could not load requests.');
+            if (!silent) Alert.alert('Could Not Load Requests', 'Please check your connection and try again.');
         }
         finally { setLoading(false); setRefreshing(false); }
     }, []);
@@ -91,13 +91,18 @@ const AcceptRequestScreen = ({ route, navigation }) => {
                 requestId: req.id,
                 status: err?.response?.status || null,
             });
-            Alert.alert('Error', err.response?.status === 410 ? 'Request expired.' : 'Failed to accept.');
+            Alert.alert(
+                err.response?.status === 410 ? 'Request Expired' : 'Could Not Accept Request',
+                err.response?.status === 410
+                    ? 'This request has expired. Ask them to send a new one.'
+                    : 'Please try again in a moment.'
+            );
         } finally { setAcceptingId(null); }
     };
 
     const handleDecline = async (req) => {
         try { await client.post(`/requests/${req.id}/decline`); setRequests(prev => prev.filter(r => r.id !== req.id)); }
-        catch { Alert.alert('Error', 'Could not decline.'); }
+        catch { Alert.alert('Could Not Decline Request', 'Please try again in a moment.'); }
     };
 
     if (loading) {

@@ -35,6 +35,27 @@ import ModernDistanceBar from '../components/ModernDistanceBar';
 
 const DEBUG = process.env.NODE_ENV !== 'production';
 
+const getSessionEndMessage = (reason) => {
+  if (reason === 'USER_ACTION') return 'The meetup was ended by one of you.';
+  if (reason === 'PEER_LEFT') return 'The other person left the meetup.';
+  if (reason === 'SESSION_TIMEOUT') return 'The meetup ended because it was inactive.';
+  return 'This meetup has ended.';
+};
+
+const getInitErrorMessage = (error) => {
+  const raw = String(error?.message || '').toLowerCase();
+  if (raw.includes('not signed in')) return 'Please sign in again to continue.';
+  if (raw.includes('no active session')) return 'No active meetup found. Accept a request first.';
+  return 'We could not start this meetup right now. Please try again.';
+};
+
+const formatSessionDistance = (meters) => {
+  if (meters == null || Number.isNaN(meters)) return null;
+  if (meters < 1000) return `${Math.round(meters)} m`;
+  const km = meters / 1000;
+  return `${km.toFixed(km >= 10 ? 1 : 2)} km`;
+};
+
 const ActiveSessionScreen = ({ route, navigation }) => {
   const { friend, sessionId: routeSessionId, inviteToken } = route.params || {};
   const { user } = useAuth();
@@ -67,6 +88,8 @@ const ActiveSessionScreen = ({ route, navigation }) => {
 
   // Peer display name (passed from accept flow or friend param)
   const peerName = friend?.display_name || friend?.name || 'Peer';
+  const distanceText = formatSessionDistance(routeDistance);
+  const durationText = routeDuration != null ? formatDuration(routeDuration) : null;
 
   // Peer info
   const [peerLastSeenText, setPeerLastSeenText] = useState('Not yet connected');
@@ -176,10 +199,11 @@ const ActiveSessionScreen = ({ route, navigation }) => {
         console.error('[ActiveSessionScreen] Initialization error:', error);
         if (!isMountedRef.current) return;
 
-        setLocationError(error.message || 'Failed to initialize session');
+        const friendlyInitMessage = getInitErrorMessage(error);
+        setLocationError(friendlyInitMessage);
         setIsLoading(false);
 
-        Alert.alert('Error', error.message || 'Failed to initialize session', [
+        Alert.alert('Unable to Start Meetup', friendlyInitMessage, [
           {
             text: 'Go Back',
             onPress: () => {
@@ -246,7 +270,7 @@ const ActiveSessionScreen = ({ route, navigation }) => {
       if (payload.status === 'offline') {
         setPeerLocation(null);
         setPeerLastSeenText('Offline');
-        Alert.alert('Peer Offline', 'Your peer has disconnected. But you can still see their last location.');
+        Alert.alert('Connection Paused', 'The other person is offline. You can stay here and wait for them to reconnect.');
       }
     });
 
@@ -274,7 +298,7 @@ const ActiveSessionScreen = ({ route, navigation }) => {
       }
 
       _cleanup();
-      Alert.alert('Session Ended', `Reason: ${payload.reason}`, [
+      Alert.alert('Meetup Ended', getSessionEndMessage(payload.reason), [
         {
           text: 'OK',
           onPress: () => {
@@ -465,12 +489,12 @@ const ActiveSessionScreen = ({ route, navigation }) => {
    */
   const handleEndSession = useCallback(() => {
     Alert.alert(
-      'End Session',
-      'Are you sure you want to end this meeting?',
+      'End Meetup?',
+      'This will end location sharing for both of you.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'End Session',
+          text: 'End Meetup',
           style: 'destructive',
           onPress: async () => {
             try {
@@ -493,7 +517,7 @@ const ActiveSessionScreen = ({ route, navigation }) => {
               });
             } catch (error) {
               console.error('[ActiveSessionScreen] End session error:', error);
-              Alert.alert('Error', 'Failed to end session');
+              Alert.alert('Could Not End Meetup', 'Please try again in a moment.');
               setIsStopping(false);
             }
           },
@@ -523,7 +547,7 @@ const ActiveSessionScreen = ({ route, navigation }) => {
           if (prev <= 1) {
             clearInterval(arrivalTimerRef.current);
             setIsConfirmingArrival(false);
-            Alert.alert('Timeout', 'The other person did not confirm arrival. Please try again.');
+            Alert.alert('No Confirmation Yet', 'The other person has not confirmed arrival. You can try again.');
             return 0;
           }
           return prev - 1;
@@ -603,12 +627,61 @@ const ActiveSessionScreen = ({ route, navigation }) => {
             body { margin: 0; padding: 0; font-family: -apple-system, sans-serif; }
             #map { position: absolute; top: 0; bottom: 0; width: 100%; }
             .label-icon { background: transparent; border: none; }
+            .marker-label-wrap {
+              transform: translateY(20px);
+              display: flex;
+              justify-content: center;
+            }
             .marker-label {
-              font-size: 12px; font-weight: 700;
-              color: #fff; background: rgba(0,0,0,0.6);
-              padding: 2px 6px; border-radius: 8px;
-              white-space: nowrap; text-align: center;
-              margin-top: 4px;
+              font-size: 11px;
+              font-weight: 700;
+              color: #17212f;
+              background: rgba(255,255,255,0.98);
+              border: 1px solid rgba(23,33,47,0.18);
+              box-shadow: 0 3px 10px rgba(0, 0, 0, 0.16);
+              padding: 3px 7px;
+              border-radius: 999px;
+              white-space: nowrap;
+              text-align: center;
+              max-width: 110px;
+              overflow: hidden;
+              text-overflow: ellipsis;
+            }
+            .marker-label.peer {
+              border-color: rgba(15, 22, 35, 0.26);
+            }
+            .user-marker {
+              width: 14px;
+              height: 14px;
+              border-radius: 7px;
+              border: 2px solid #ffffff;
+              box-shadow: 0 0 0 2px var(--marker-color), 0 3px 8px rgba(0, 0, 0, 0.25);
+              background: var(--marker-color);
+            }
+            .peer-marker {
+              width: 14px;
+              height: 14px;
+              border-radius: 7px;
+              border: 2px solid #ffffff;
+              box-shadow: 0 0 0 2px var(--marker-color), 0 3px 8px rgba(0, 0, 0, 0.25);
+              background: var(--marker-color);
+              position: relative;
+            }
+            .peer-marker::after {
+              content: '';
+              position: absolute;
+              width: 26px;
+              height: 26px;
+              left: -8px;
+              top: -8px;
+              border-radius: 13px;
+              border: 1.5px solid var(--marker-color);
+              opacity: 0.28;
+              animation: peerPulse 2.2s infinite ease-out;
+            }
+            @keyframes peerPulse {
+              0% { transform: scale(0.95); opacity: 0.35; }
+              100% { transform: scale(1.35); opacity: 0; }
             }
           </style>
         </head>
@@ -625,11 +698,23 @@ const ActiveSessionScreen = ({ route, navigation }) => {
             let myMarker, peerMarker, myLabel, peerLabel, myCircle, peerCircle, routeLine;
             let firstFit = true;
 
-            function makeLabel(text, color) {
+            function makeLabel(text, kind) {
+              const safeText = String(text || '').slice(0, 20);
               return L.divIcon({
                 className: 'label-icon',
-                html: '<div class="marker-label" style="background:' + color + '88">' + text + '</div>',
-                iconAnchor: [20, -10]
+                html: '<div class="marker-label-wrap"><div class="marker-label ' + kind + '">' + safeText + '</div></div>',
+                iconSize: [120, 24],
+                iconAnchor: [60, 0]
+              });
+            }
+
+            function makeDotIcon(kind, color) {
+              const className = kind === 'peer' ? 'peer-marker' : 'user-marker';
+              return L.divIcon({
+                className: 'label-icon',
+                html: '<div class="' + className + '" style="--marker-color:' + color + '"></div>',
+                iconSize: [14, 14],
+                iconAnchor: [7, 7]
               });
             }
 
@@ -643,10 +728,8 @@ const ActiveSessionScreen = ({ route, navigation }) => {
                   myMarker.setLatLng([lat, lon]);
                   if (myCircle) { myCircle.setLatLng([lat, lon]); myCircle.setRadius(accuracy_m || 10); }
                 } else {
-                  myMarker = L.circleMarker([lat, lon], {
-                    radius: 10, color: '${colors.myMarker}', fillColor: '${colors.myMarker}', fillOpacity: 1, weight: 2.5
-                  }).addTo(map);
-                  myLabel = L.marker([lat, lon], { icon: makeLabel('Me', '${colors.myMarker}'), interactive: false }).addTo(map);
+                  myMarker = L.marker([lat, lon], { icon: makeDotIcon('me', '${colors.myMarker}') }).addTo(map);
+                  myLabel = L.marker([lat, lon], { icon: makeLabel('You', 'me'), interactive: false, zIndexOffset: 1000 }).addTo(map);
                   myCircle = L.circle([lat, lon], { radius: accuracy_m || 10, color: '${colors.myMarker}', fillColor: '${colors.myMarker}', fillOpacity: 0.06, weight: 1 }).addTo(map);
                 }
                 if (myLabel) myLabel.setLatLng([lat, lon]);
@@ -658,10 +741,8 @@ const ActiveSessionScreen = ({ route, navigation }) => {
                   peerMarker.setLatLng([lat, lon]);
                   if (peerCircle) { peerCircle.setLatLng([lat, lon]); peerCircle.setRadius(accuracy_m || 10); }
                 } else {
-                  peerMarker = L.circleMarker([lat, lon], {
-                    radius: 10, color: '${colors.peerMarker}', fillColor: '${colors.peerMarker}', fillOpacity: 1, weight: 2.5
-                  }).addTo(map);
-                  peerLabel = L.marker([lat, lon], { icon: makeLabel(peer, '${colors.peerMarker}'), interactive: false }).addTo(map);
+                  peerMarker = L.marker([lat, lon], { icon: makeDotIcon('peer', '${colors.peerMarker}') }).addTo(map);
+                  peerLabel = L.marker([lat, lon], { icon: makeLabel(peer, 'peer'), interactive: false, zIndexOffset: 1000 }).addTo(map);
                   peerCircle = L.circle([lat, lon], { radius: accuracy_m || 10, color: '${colors.peerMarker}', fillColor: '${colors.peerMarker}', fillOpacity: 0.08, weight: 1 }).addTo(map);
                 }
                 if (peerLabel) peerLabel.setLatLng([lat, lon]);
@@ -757,6 +838,23 @@ const ActiveSessionScreen = ({ route, navigation }) => {
             <ModernDistanceBar distanceM={routeDistance} maxDistanceM={500} colors={colors} />
           )}
         </View>
+
+        {(distanceText || durationText) && (
+          <View style={s.statsRow}>
+            {distanceText && (
+              <View style={s.statPill}>
+                <Text style={s.statLabel}>Distance</Text>
+                <Text style={s.statValue}>{distanceText}</Text>
+              </View>
+            )}
+            {durationText && (
+              <View style={s.statPill}>
+                <Text style={s.statLabel}>ETA</Text>
+                <Text style={s.statValue}>{durationText}</Text>
+              </View>
+            )}
+          </View>
+        )}
 
         {peerLocation && (
           <View style={s.modeTabs}>
@@ -855,11 +953,41 @@ const makeStyles = (c) => StyleSheet.create({
     borderTopLeftRadius: Radius.xl, borderTopRightRadius: Radius.xl,
     paddingHorizontal: Spacing.lg, paddingTop: Spacing.md, paddingBottom: Spacing.lg,
     borderTopWidth: 1, borderColor: c.border,
+    shadowColor: c.textPrimary,
+    shadowOffset: { width: 0, height: -3 },
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    elevation: 10,
   },
   infoRow: { flexDirection: 'row', alignItems: 'center', marginBottom: Spacing.md },
   peerInfo: { flex: 1 },
   peerName: { ...Font.subtitle, color: c.textPrimary },
   peerSub: { ...Font.caption, color: c.textMuted, marginTop: 3 },
+  statsRow: {
+    flexDirection: 'row',
+    gap: Spacing.sm,
+    marginBottom: Spacing.md,
+  },
+  statPill: {
+    flex: 1,
+    backgroundColor: c.surfaceElevated,
+    borderWidth: 1,
+    borderColor: c.border,
+    borderRadius: Radius.md,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+  },
+  statLabel: {
+    ...Font.caption,
+    color: c.textMuted,
+    fontSize: 11,
+  },
+  statValue: {
+    color: c.textPrimary,
+    fontSize: 15,
+    fontWeight: '800',
+    marginTop: 2,
+  },
   distanceBadge: { alignItems: 'flex-end' },
   distanceValue: { fontSize: 22, fontWeight: '800', color: c.textPrimary, letterSpacing: -0.5 },
   etaValue: { ...Font.caption, color: c.textMuted, marginTop: 2 },
