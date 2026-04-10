@@ -13,6 +13,7 @@ import FriendListScreen from '../screens/FriendListScreen';
 import QuickFriendsScreen from '../screens/QuickFriendsScreen';
 import RequestScreen from '../screens/RequestScreen';
 import AcceptRequestScreen from '../screens/AcceptRequestScreen';
+import RequestsTabsScreen from '../screens/RequestsTabsScreen';
 import ActiveSessionScreen from '../screens/ActiveSessionScreen';
 import SettingsScreen from '../screens/SettingsScreen';
 
@@ -46,6 +47,7 @@ const MainStack = () => {
       <Stack.Screen name="FriendList" component={FriendListScreen} options={{ title: 'Find a Friend' }} />
       <Stack.Screen name="Request" component={RequestScreen} options={{ headerShown: false }} />
       <Stack.Screen name="AcceptRequest" component={AcceptRequestScreen} options={{ title: 'Requests' }} />
+      <Stack.Screen name="RequestsTabs" component={RequestsTabsScreen} options={{ title: 'Requests' }} />
       <Stack.Screen name="Settings" component={SettingsScreen} options={{ title: 'Settings' }} />
       <Stack.Screen name="ActiveSession" component={ActiveSessionScreen} options={{ headerShown: false }} />
     </Stack.Navigator>

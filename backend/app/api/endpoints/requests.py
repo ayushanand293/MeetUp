@@ -68,7 +68,7 @@ def create_meet_request(
     # Expire stale requests first
     _expire_stale(db)
 
-    # Check if a live pending request already exists
+    # Check if a live pending request already exists (current user → receiver)
     existing = (
         db.query(MeetRequest)
         .filter(
@@ -81,6 +81,24 @@ def create_meet_request(
 
     if existing and not _is_expired(existing):
         return existing
+
+    # Check if a live pending request exists in reverse direction (receiver → current user)
+    # This prevents bidirectional request races
+    reverse_existing = (
+        db.query(MeetRequest)
+        .filter(
+            MeetRequest.requester_id == receiver_id,
+            MeetRequest.receiver_id == current_user.id,
+            MeetRequest.status == RequestStatus.PENDING,
+        )
+        .first()
+    )
+
+    if reverse_existing and not _is_expired(reverse_existing):
+        raise HTTPException(
+            status_code=409,
+            detail="Request already being discussed. A request is pending from both directions. Accept or decline the existing request first."
+        )
 
     req = MeetRequest(requester_id=current_user.id, receiver_id=receiver_id)
     db.add(req)

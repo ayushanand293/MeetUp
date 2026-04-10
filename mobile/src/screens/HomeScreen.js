@@ -40,6 +40,7 @@ const HomeScreen = ({ navigation }) => {
     const { colors } = useTheme();
     const { user } = useAuth();
     const [activeSession, setActiveSession] = useState(null);
+    const [incomingRequests, setIncomingRequests] = useState([]);
     const [outgoingRequests, setOutgoingRequests] = useState([]);
     const [isRefreshing, setIsRefreshing] = useState(false);
     const [homeError, setHomeError] = useState('');
@@ -47,6 +48,7 @@ const HomeScreen = ({ navigation }) => {
     const [history, setHistory] = useState([]);
     const pollRef = useRef(null);
     const activeSessionIdRef = useRef(null);
+    const lastAutoRoutedSessionRef = useRef(null);
     const [now, setNow] = useState(Date.now());
 
     // Entrance
@@ -99,11 +101,11 @@ const HomeScreen = ({ navigation }) => {
     const fetchData = useCallback(async (silent = false) => {
         if (!silent) setIsRefreshing(true);
         try {
-            const [sRes, oRes] = await Promise.allSettled([
-                client.get('/sessions/active'), client.get('/requests/outgoing'),
+            const [sRes, oRes, iRes] = await Promise.allSettled([
+                client.get('/sessions/active'), client.get('/requests/outgoing'), client.get('/requests/pending'),
             ]);
 
-            if (sRes.status === 'rejected' && oRes.status === 'rejected') {
+            if (sRes.status === 'rejected' && oRes.status === 'rejected' && iRes.status === 'rejected') {
                 setHomeError('Could not refresh home data. Pull to retry.');
             } else {
                 setHomeError('');
@@ -120,6 +122,18 @@ const HomeScreen = ({ navigation }) => {
             }
 
             setOutgoingRequests(oRes.status === 'fulfilled' ? oRes.value.data : []);
+            setIncomingRequests(iRes.status === 'fulfilled' ? iRes.value.data : []);
+
+            // Auto-open active session as soon as it appears (sender/receiver instant jump behavior)
+            if (
+                nextSessionId &&
+                nextSessionId !== lastAutoRoutedSessionRef.current
+            ) {
+                lastAutoRoutedSessionRef.current = nextSessionId;
+                clearInterval(pollRef.current);
+                navigation.navigate('ActiveSession', { sessionId: nextSessionId });
+                return;
+            }
 
             if (nextSessionId && !prevSessionId) {
                 Animated.parallel([
@@ -149,6 +163,7 @@ const HomeScreen = ({ navigation }) => {
     };
 
     const pending = outgoingRequests.filter(r => r.status === 'PENDING');
+    const incomingPending = incomingRequests;
     const expiredCount = pending.filter(r => countdown(r.expires_at) === '00:00').length;
     const displayName = user?.email?.split('@')[0] || 'You';
     const ambientUp = ambientFloat.interpolate({ inputRange: [0, 1], outputRange: [0, -14] });
@@ -377,7 +392,28 @@ const HomeScreen = ({ navigation }) => {
                 </Animated.View>
             )}
 
-            {hasLoadedOnce && !activeSession && pending.length === 0 && (
+            {incomingPending.length > 0 && (
+                <Animated.View style={{ opacity: cardsOp, transform: [{ translateY: cardsY }], marginBottom: Spacing.lg }}>
+                    <TouchableOpacity
+                        style={{
+                            backgroundColor: colors.surface,
+                            borderWidth: 1,
+                            borderColor: colors.textPrimary,
+                            borderRadius: Radius.md,
+                            padding: Spacing.md,
+                        }}
+                        onPress={() => navigation.navigate('RequestsTabs', { activeTab: 'incoming' })}>
+                        <Text style={{ color: colors.textPrimary, fontWeight: '800', marginBottom: 4 }}>
+                            You have {incomingPending.length} incoming request{incomingPending.length > 1 ? 's' : ''}
+                        </Text>
+                        <Text style={{ color: colors.textSecondary, fontSize: 13 }}>
+                            Tap to accept or decline now.
+                        </Text>
+                    </TouchableOpacity>
+                </Animated.View>
+            )}
+
+            {hasLoadedOnce && !activeSession && pending.length === 0 && incomingPending.length === 0 && (
                 <Animated.View style={{ opacity: cardsOp, transform: [{ translateY: cardsY }], marginBottom: Spacing.lg }}>
                     <View style={{
                         backgroundColor: colors.surface,
@@ -402,8 +438,8 @@ const HomeScreen = ({ navigation }) => {
                     onPress={() => navigation.navigate('QuickFriends')} />
                 <ActionCard icon="+" title="Find a Friend" sub="Search by name, send a meet request" colors={colors}
                     onPress={() => navigation.navigate('FriendList')} />
-                <ActionCard icon="○" title="Incoming Requests" sub="Accept or decline meet requests" colors={colors}
-                    onPress={() => navigation.navigate('AcceptRequest')} />
+                <ActionCard icon="○" title="Your Requests" sub="Show incoming and waiting requests" colors={colors}
+                    onPress={() => navigation.navigate('RequestsTabs')} />
             </Animated.View>
 
             {timelineDisplay.length > 0 && (

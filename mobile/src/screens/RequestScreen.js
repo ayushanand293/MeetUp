@@ -12,6 +12,8 @@ const RequestScreen = ({ route, navigation }) => {
     const { friend } = route.params || {};
     const [loading, setLoading] = useState(false);
     const [requestSent, setRequestSent] = useState(false);
+    const [sentRequestId, setSentRequestId] = useState(null);
+    const waitingPollRef = useRef(null);
 
     const cardY = useRef(new Animated.Value(40)).current;
     const cardOp = useRef(new Animated.Value(0)).current;
@@ -38,14 +40,71 @@ const RequestScreen = ({ route, navigation }) => {
         return () => loop.stop();
     }, [ambient]);
 
+    useEffect(() => {
+        if (!requestSent) return;
+
+        const checkAcceptanceAndSession = async () => {
+            try {
+                // 1) Check if this specific outgoing request has been accepted
+                const outgoingRes = await client.get('/requests/outgoing');
+                const outgoing = outgoingRes?.data || [];
+                const matched = outgoing.find((r) => {
+                    if (sentRequestId && String(r.id) === String(sentRequestId)) return true;
+                    return String(r.receiver_id) === String(friend?.id);
+                });
+
+                // Keep waiting until backend marks it accepted
+                if (!matched || String(matched.status) !== 'ACCEPTED') {
+                    return;
+                }
+
+                // 2) Once accepted, open active session immediately
+                const res = await client.get('/sessions/active');
+                const activeSessionId = res?.data?.session_id;
+                if (activeSessionId) {
+                    if (waitingPollRef.current) clearInterval(waitingPollRef.current);
+                    navigation.reset({
+                        index: 1,
+                        routes: [
+                            { name: 'Home' },
+                            { name: 'ActiveSession', params: { sessionId: activeSessionId, friend } },
+                        ],
+                    });
+                }
+            } catch (_) {
+                // keep polling silently while waiting
+            }
+        };
+
+        checkAcceptanceAndSession();
+        waitingPollRef.current = setInterval(checkAcceptanceAndSession, 2000);
+
+        return () => {
+            if (waitingPollRef.current) clearInterval(waitingPollRef.current);
+        };
+    }, [requestSent, sentRequestId, navigation, friend]);
+
     const handleSend = async () => {
         if (!friend) return;
         setLoading(true);
         try {
-            await client.post('/requests/', { to_user_id: friend.id });
+            const res = await client.post('/requests/', { to_user_id: friend.id });
+            if (res?.data?.id) {
+                setSentRequestId(res.data.id);
+            }
             setRequestSent(true);
         }
-        catch (e) { Alert.alert('Error', e.response?.data?.detail || 'Failed to send.'); }
+        catch (e) {
+            const status = e?.response?.status;
+            if (status === 409) {
+                Alert.alert(
+                    'Request Already Being Discussed',
+                    'A request is pending between you and this person. Accept or decline the existing request first.'
+                );
+            } else {
+                Alert.alert('Could Not Send Request', 'Please try again in a moment.');
+            }
+        }
         finally { setLoading(false); }
     };
 
@@ -131,7 +190,7 @@ const RequestScreen = ({ route, navigation }) => {
                         marginBottom: Spacing.xl,
                     }}>
                         <Text style={{ color: colors.textPrimary, fontWeight: '800', fontSize: 13 }}>Request sent successfully</Text>
-                        <Text style={{ color: colors.textSecondary, marginTop: 4, fontSize: 12 }}>You can return home and wait for acceptance.</Text>
+                        <Text style={{ color: colors.textSecondary, marginTop: 4, fontSize: 12 }}>Waiting for acceptance. This screen will auto-open the live session instantly.</Text>
                     </View>
                 )}
 

@@ -203,8 +203,8 @@ const SettingsScreen = () => {
       await client.post('/users/profile', { display_name: nextName });
       await updateAccountDetails({ data: { display_name: nextName } });
       showBanner('success', 'Display name updated successfully.');
-    } catch (error) {
-      showBanner('error', error?.response?.data?.detail || 'Could not update profile right now.');
+    } catch {
+      showBanner('error', 'Could not update your profile right now. Please try again.');
     } finally {
       setSavingName(false);
     }
@@ -227,8 +227,8 @@ const SettingsScreen = () => {
       setSavingEmail(true);
       await updateAccountDetails({ email: nextEmail });
       showBanner('success', 'Email update requested. Please confirm from your inbox.');
-    } catch (error) {
-      showBanner('error', error?.message || 'Could not update email right now.');
+    } catch {
+      showBanner('error', 'Could not update your email right now. Please try again.');
     } finally {
       setSavingEmail(false);
     }
@@ -258,8 +258,8 @@ const SettingsScreen = () => {
       await updateAccountDetails({ phone: normalizedPhone });
       setPhoneInput(normalizedPhone);
       showBanner('success', 'Phone update requested. Complete OTP verification if prompted.');
-    } catch (error) {
-      showBanner('error', error?.message || 'Could not update phone right now.');
+    } catch {
+      showBanner('error', 'Could not update your phone number right now. Please try again.');
     } finally {
       setSavingPhone(false);
     }
@@ -284,8 +284,8 @@ const SettingsScreen = () => {
       setConfirmPassword('');
       setTouched((prev) => ({ ...prev, password: false, confirmPassword: false }));
       showBanner('success', 'Password updated successfully.');
-    } catch (error) {
-      showBanner('error', error?.message || 'Could not update password right now.');
+    } catch {
+      showBanner('error', 'Could not update your password right now. Please try again.');
     } finally {
       setSavingPassword(false);
     }

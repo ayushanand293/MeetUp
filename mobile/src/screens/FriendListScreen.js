@@ -30,7 +30,7 @@ const FriendListScreen = ({ navigation }) => {
             const res = await client.get(`/users/search?name=${encodeURIComponent(text.trim())}`);
             setResults(res.data || []); setSearched(true);
         } catch (err) {
-            setSearchError(err.response?.data?.detail || 'Search failed. Please try again.');
+            setSearchError('Search is unavailable right now. Please try again.');
         }
         finally { setSearching(false); }
     }, []);

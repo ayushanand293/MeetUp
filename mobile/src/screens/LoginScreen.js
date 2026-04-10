@@ -19,7 +19,7 @@ const LoginScreen = ({ navigation, route }) => {
     const [otp, setOtp] = useState('');
     const [otpSent, setOtpSent] = useState(false);
     const [focused, setFocused] = useState(null);
-    const { signInWithEmail, signInWithPhone, verifyPhoneOTP, loading } = useAuth();
+    const { signInWithEmail, signInWithPhone, verifyPhoneOTP, loading, sessionInvalidatedElsewhere, clearSessionInvalidatedFlag } = useAuth();
 
     // Entrance animations
     const logoScale = useRef(new Animated.Value(0.7)).current;
@@ -63,6 +63,21 @@ const LoginScreen = ({ navigation, route }) => {
         }).start();
     }, [activeTab]);
 
+    useEffect(() => {
+        if (sessionInvalidatedElsewhere) {
+            Alert.alert(
+                'Logged In Elsewhere',
+                'You\'ve logged in on another device. Your previous session has ended.',
+                [
+                    {
+                        text: 'OK',
+                        onPress: () => clearSessionInvalidatedFlag(),
+                    },
+                ]
+            );
+        }
+    }, [sessionInvalidatedElsewhere]);
+
     const handleEmailLogin = async () => {
         if (!email.trim() || !password) { Alert.alert('Missing fields', 'Enter your email and password'); return; }
         try {
@@ -71,6 +86,12 @@ const LoginScreen = ({ navigation, route }) => {
                 const name = route?.params?.pendingName || data?.user?.user_metadata?.display_name || email.split('@')[0];
                 await client.post('/users/profile', { display_name: name });
             } catch (_) { }
+            // Sign out other devices after successful login
+            try {
+                await client.post('/auth/session/signout-other-devices');
+            } catch (_) {
+                // Silently fail - this is optional
+            }
         } catch (error) {
             let msg = error.message;
             if (msg.includes('Email not confirmed')) msg = 'Please confirm your email. Check your inbox.';
@@ -82,13 +103,21 @@ const LoginScreen = ({ navigation, route }) => {
     const handlePhoneLogin = async () => {
         if (!phone.trim()) { Alert.alert('Missing field', 'Enter your phone number'); return; }
         try { await signInWithPhone(phone.trim()); setOtpSent(true); }
-        catch (e) { Alert.alert('Error', e.message); }
+        catch (_) { Alert.alert('Could Not Send Code', 'Please check your phone number and try again.'); }
     };
 
     const handleVerifyOtp = async () => {
         if (!otp.trim()) { Alert.alert('Missing field', 'Enter the OTP'); return; }
-        try { await verifyPhoneOTP(phone.trim(), otp.trim()); }
-        catch (e) { Alert.alert('Invalid code', e.message); }
+        try {
+            await verifyPhoneOTP(phone.trim(), otp.trim());
+            // Sign out other devices after successful login
+            try {
+                await client.post('/auth/session/signout-other-devices');
+            } catch (_) {
+                // Silently fail - this is optional
+            }
+        }
+        catch (_) { Alert.alert('Invalid Code', 'Please check the code and try again.'); }
     };
 
     const s = makeStyles(colors);
