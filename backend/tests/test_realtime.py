@@ -1,20 +1,30 @@
 import uuid
 from datetime import datetime, timedelta
+from uuid import UUID
 
 import jwt
 import pytest
-from fastapi.testclient import TestClient
 
 import app.api.endpoints.realtime as realtime_endpoint
 from app.core.config import settings
-from app.main import app
+from app.models.session import Session as MeetSession
+from app.models.session import SessionParticipant, SessionStatus
+from app.models.user import User
 from app.realtime.schemas import EventType
 
 
-@pytest.fixture(name="client")
-def client_fixture():
-    with TestClient(app) as test_client:
-        yield test_client
+def provision_session_participants(db, session_id: str, user_ids: list[str]) -> None:
+    """Create an active session and joined participants for websocket auth checks."""
+    users = [User(id=UUID(user_id), email=f"{user_id}@test.local") for user_id in user_ids]
+    db.add_all(users)
+
+    session = MeetSession(id=UUID(session_id), status=SessionStatus.ACTIVE)
+    db.add(session)
+    db.flush()
+
+    participants = [SessionParticipant(session_id=session.id, user_id=UUID(user_id)) for user_id in user_ids]
+    db.add_all(participants)
+    db.commit()
 
 
 def receive_until_type(websocket, expected_type: str, max_attempts: int = 6):
@@ -45,10 +55,12 @@ def test_websocket_connection_no_token(client):
         pass  # Expected
 
 
-def test_websocket_broadcast(client):
+def test_websocket_broadcast(client, db):
     session_id = str(uuid.uuid4())
     user1_id = str(uuid.uuid4())
     user2_id = str(uuid.uuid4())
+
+    provision_session_participants(db, session_id, [user1_id, user2_id])
 
     token1 = create_test_token(user1_id)
     token2 = create_test_token(user2_id)
@@ -72,11 +84,13 @@ def test_websocket_broadcast(client):
             print("✅ User 2 received location from User 1")
 
 
-def test_websocket_echo_prevention(client):
+def test_websocket_echo_prevention(client, db):
     """Verify User 1 does NOT receive their own message"""
     session_id = str(uuid.uuid4())
     user1_id = str(uuid.uuid4())
     token1 = create_test_token(user1_id)
+
+    provision_session_participants(db, session_id, [user1_id])
 
     with client.websocket_connect(f"/api/v1/ws/meetup?token={token1}&session_id={session_id}") as ws1:
         payload = {"type": "location_update", "payload": {"lat": 37.7749, "lon": -122.4194}}
@@ -90,11 +104,13 @@ def test_websocket_echo_prevention(client):
         pass
 
 
-def test_websocket_presence(client):
+def test_websocket_presence(client, db):
     """Verify that connecting/disconnecting triggers presence events"""
     session_id = str(uuid.uuid4())
     user1_id = str(uuid.uuid4())
     user2_id = str(uuid.uuid4())
+
+    provision_session_participants(db, session_id, [user1_id, user2_id])
 
     token1 = create_test_token(user1_id)
     token2 = create_test_token(user2_id)
@@ -121,10 +137,12 @@ def test_websocket_presence(client):
         print("✅ User 1 received PRESENCE: OFFLINE for User 2")
 
 
-def test_websocket_end_session_event_broadcast(client, monkeypatch):
+def test_websocket_end_session_event_broadcast(client, db, monkeypatch):
     session_id = str(uuid.uuid4())
     user1_id = str(uuid.uuid4())
     user2_id = str(uuid.uuid4())
+
+    provision_session_participants(db, session_id, [user1_id, user2_id])
 
     token1 = create_test_token(user1_id)
     token2 = create_test_token(user2_id)

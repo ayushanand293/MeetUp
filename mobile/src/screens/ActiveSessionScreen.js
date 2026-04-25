@@ -22,12 +22,18 @@ import {
   SafeAreaView,
   Modal,
   Animated,
+  Share,
+  Linking,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
+import { AppState } from 'react-native';
+import { useIsFocused } from '@react-navigation/native';
+import * as ExpoLinking from 'expo-linking';
 import { useAuth } from '../context/AuthContext';
 import locationService from '../services/locationService';
 import realtimeService from '../services/realtimeService';
 import client from '../api/client';
+import analyticsService from '../services/analyticsService';
 import { supabase } from '../api/supabase';
 import { getRoute, formatDistance, formatDuration, haversineDistance, TransportMode } from '../services/orsService';
 import { useTheme, Spacing, Radius, Font } from '../theme';
@@ -39,6 +45,8 @@ const getSessionEndMessage = (reason) => {
   if (reason === 'USER_ACTION') return 'The meetup was ended by one of you.';
   if (reason === 'PEER_LEFT') return 'The other person left the meetup.';
   if (reason === 'SESSION_TIMEOUT') return 'The meetup ended because it was inactive.';
+  if (reason === 'PROXIMITY_REACHED') return 'You both reached the meetup point.';
+  if (reason === 'MANUAL_CONFIRM') return 'Both of you confirmed arrival.';
   return 'This meetup has ended.';
 };
 
@@ -46,7 +54,45 @@ const getInitErrorMessage = (error) => {
   const raw = String(error?.message || '').toLowerCase();
   if (raw.includes('not signed in')) return 'Please sign in again to continue.';
   if (raw.includes('no active session')) return 'No active meetup found. Accept a request first.';
+  if (raw.includes('permission')) return 'Location permission is required to share your location.';
+  if (raw.includes('location services')) return 'Turn on location services to continue sharing.';
+  if (raw.includes('network') || raw.includes('fetch') || raw.includes('timeout') || raw.includes('internet')) {
+    return 'We could not connect right now. Check your internet and try again.';
+  }
   return 'We could not start this meetup right now. Please try again.';
+};
+
+const classifyInitIssue = (error) => {
+  const raw = String(error?.message || '').toLowerCase();
+  if (raw.includes('permission')) {
+    return {
+      kind: 'permission',
+      title: 'Location Permission Needed',
+      message: 'Grant location access so MeetUp can keep sharing your position.',
+    };
+  }
+
+  if (raw.includes('location services')) {
+    return {
+      kind: 'services',
+      title: 'Location Services Off',
+      message: 'Turn on location services on this device, then retry.',
+    };
+  }
+
+  if (raw.includes('network') || raw.includes('fetch') || raw.includes('timeout') || raw.includes('internet')) {
+    return {
+      kind: 'network',
+      title: 'Network Unavailable',
+      message: 'Check your connection and tap Retry when you are back online.',
+    };
+  }
+
+  return {
+    kind: 'generic',
+    title: 'Unable to Start Meetup',
+    message: 'We could not start this meetup right now. Please try again.',
+  };
 };
 
 const formatSessionDistance = (meters) => {
@@ -58,9 +104,10 @@ const formatSessionDistance = (meters) => {
 
 const ActiveSessionScreen = ({ route, navigation }) => {
   const { friend, sessionId: routeSessionId, inviteToken } = route.params || {};
-  const { user } = useAuth();
+  const { user, rememberActiveSession, clearActiveSessionHint } = useAuth();
   const { colors, isDark } = useTheme();
   const s = makeStyles(colors);
+  const isFocused = useIsFocused();
 
   // Location state
   const [myLocation, setMyLocation] = useState(null);
@@ -71,11 +118,14 @@ const ActiveSessionScreen = ({ route, navigation }) => {
   const [wsStatus, setWsStatus] = useState('disconnected');
   const [wsError, setWsError] = useState(null);
   const [reconnectCountdown, setReconnectCountdown] = useState(0);
+  const [initIssue, setInitIssue] = useState(null);
+  const [initAttempt, setInitAttempt] = useState(0);
 
   // Session state
   const [sessionId, setSessionId] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isStopping, setIsStopping] = useState(false);
+  const [isSharingInvite, setIsSharingInvite] = useState(false);
 
   // Routing state
   const [selectedMode, setSelectedMode] = useState('foot-walking');
@@ -86,22 +136,27 @@ const ActiveSessionScreen = ({ route, navigation }) => {
   const [routeLoading, setRouteLoading] = useState(false);
   const routeFetchRef = useRef(null);
 
-  // Peer display name (passed from accept flow or friend param)
-  const peerName = friend?.display_name || friend?.name || 'Peer';
+  // Peer display name (passed from accept flow or friend param, or fetched from session)
+  const [peerName, setPeerName] = useState(friend?.display_name || friend?.name || 'Peer');
   const distanceText = formatSessionDistance(routeDistance);
   const durationText = routeDuration != null ? formatDuration(routeDuration) : null;
 
   // Peer info
   const [peerLastSeenText, setPeerLastSeenText] = useState('Not yet connected');
   const [peerIsStale, setPeerIsStale] = useState(false);
+  const [sharingPausedText, setSharingPausedText] = useState('');
+  const [appState, setAppState] = useState(AppState.currentState);
 
   // Refs for cleanup
   const webViewRef = useRef(null);
   const locationIntervalRef = useRef(null);
   const lastSeenUpdateRef = useRef(null);
   const locationUnsubscribeRef = useRef(null);
+  const locationEventUnsubscribesRef = useRef({});
   const wsEventUnsubscribesRef = useRef({});
   const countdownIntervalRef = useRef(null);
+  const peerOfflineTimerRef = useRef(null);
+  const peerOfflineAlertedRef = useRef(false);
   const isMountedRef = useRef(true);
   // WebView load state
   const webViewReadyRef = useRef(false);
@@ -113,6 +168,88 @@ const ActiveSessionScreen = ({ route, navigation }) => {
   const [isConfirmingArrival, setIsConfirmingArrival] = useState(false);
   const [arrivalCountdown, setArrivalCountdown] = useState(60);
   const arrivalTimerRef = useRef(null);
+  const sessionLaunchStartedAtRef = useRef(Date.now());
+  const [isSharingPaused, setIsSharingPaused] = useState(false);
+
+  const _subscribeToLocationEvents = useCallback(() => {
+    const unsubscribes = {};
+
+    unsubscribes.permissionGranted = locationService.on('permissionGranted', () => {
+      if (!isMountedRef.current) return;
+      setInitIssue(null);
+      setLocationError(null);
+    });
+
+    unsubscribes.permissionDenied = locationService.on('permissionDenied', () => {
+      if (!isMountedRef.current) return;
+      setInitIssue({
+        kind: 'permission',
+        title: 'Location Permission Needed',
+        message: 'Grant location access so MeetUp can keep sharing your position.',
+      });
+      setLocationError('Location permission is required to share your location.');
+    });
+
+    unsubscribes.permissionUndetermined = locationService.on('permissionUndetermined', () => {
+      if (!isMountedRef.current) return;
+      setInitIssue({
+        kind: 'permission',
+        title: 'Location Permission Needed',
+        message: 'Grant location access so MeetUp can keep sharing your position.',
+      });
+      setLocationError('Location permission is required to share your location.');
+    });
+
+    unsubscribes.permissionError = locationService.on('permissionError', ({ error }) => {
+      if (!isMountedRef.current) return;
+      setInitIssue({
+        kind: 'permission',
+        title: 'Location Permission Needed',
+        message: error?.message || 'MeetUp could not request location permission.',
+      });
+      setLocationError(error?.message || 'Location permission request failed.');
+    });
+
+    unsubscribes.locationServicesDisabled = locationService.on('locationServicesDisabled', () => {
+      if (!isMountedRef.current) return;
+      setInitIssue({
+        kind: 'services',
+        title: 'Location Services Off',
+        message: 'Turn on location services on this device, then retry.',
+      });
+      setLocationError('Location services are disabled.');
+    });
+
+    unsubscribes.trackingError = locationService.on('trackingError', ({ error }) => {
+      if (!isMountedRef.current) return;
+      setLocationError(error?.message || 'Location tracking stopped. Please retry.');
+    });
+
+    locationEventUnsubscribesRef.current = unsubscribes;
+  }, []);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      setAppState(nextState);
+
+      if (nextState === 'active') {
+        setSharingPausedText('');
+        if (locationService.isPaused && !isSharingPaused) {
+          locationService.resumeTracking('app_foregrounded');
+        }
+        return;
+      }
+
+      if (nextState.match(/inactive|background/)) {
+        setSharingPausedText('Sharing paused (app in background)');
+        if (locationService.isTracking) {
+          locationService.pauseTracking('app_backgrounded');
+        }
+      }
+    });
+
+    return () => subscription.remove();
+  }, [isSharingPaused]);
 
   /**
    * Initialize session and start services
@@ -125,6 +262,9 @@ const ActiveSessionScreen = ({ route, navigation }) => {
         setIsLoading(true);
         setLocationError(null);
         setWsError(null);
+        setInitIssue(null);
+
+        _subscribeToLocationEvents();
 
         // 1. Resolve session ID — prefer route param (from accept flow), otherwise fetch from backend
         let activeSessionId = routeSessionId;
@@ -139,8 +279,38 @@ const ActiveSessionScreen = ({ route, navigation }) => {
           activeSessionId = activeSession.session_id;
         }
 
-        setSessionId(activeSessionId);
         DEBUG && console.log('[ActiveSessionScreen] Session ID:', activeSessionId);
+        rememberActiveSession({
+          session_id: activeSessionId,
+          peer_id: friend?.id || null,
+          peer_name: friend?.display_name || friend?.name || null,
+        });
+
+        // Fetch peer display name if not provided via route params
+        if ((!friend?.display_name && !friend?.name) && peerName === 'Peer') {
+          try {
+            DEBUG && console.log('[ActiveSessionScreen] Fetching peer display name...');
+            const sessionDetailsResponse = await client.get(`/sessions/${activeSessionId}/participants`);
+            const participants = sessionDetailsResponse.data;
+            const currentUserId = String(user?.id || '');
+            
+            if (participants && Array.isArray(participants)) {
+              const peerParticipant = participants.find(p => String(p.user_id) !== currentUserId);
+              if (peerParticipant?.display_name) {
+                DEBUG && console.log('[ActiveSessionScreen] Peer display name:', peerParticipant.display_name);
+                setPeerName(peerParticipant.display_name);
+                rememberActiveSession({
+                  session_id: activeSessionId,
+                  peer_id: peerParticipant.user_id,
+                  peer_name: peerParticipant.display_name,
+                });
+              }
+            }
+          } catch (err) {
+            DEBUG && console.log('[ActiveSessionScreen] Failed to fetch peer display name:', err);
+            // Silent fail - will use default 'Peer'
+          }
+        }
 
         if (inviteToken && activeSessionId) {
           try {
@@ -157,7 +327,19 @@ const ActiveSessionScreen = ({ route, navigation }) => {
         DEBUG && console.log('[ActiveSessionScreen] Requesting location permission...');
         const hasPermission = await locationService.requestPermission();
         if (!hasPermission) {
-          throw new Error('Location permission is required to share your location.');
+          setLocationError('Location permission is required to share your location.');
+          setInitIssue({
+            kind: 'permission',
+            title: 'Location Permission Needed',
+            message: 'Grant location access so MeetUp can keep sharing your position.',
+          });
+          analyticsService.track('session_launch_failed', {
+            elapsed_ms: Date.now() - sessionLaunchStartedAtRef.current,
+            source: inviteToken ? 'invite' : routeSessionId ? 'route' : 'lookup',
+            reason: 'Location permission is required to share your location.',
+          });
+          setIsLoading(false);
+          return;
         }
 
         // 3. Start location tracking
@@ -171,11 +353,16 @@ const ActiveSessionScreen = ({ route, navigation }) => {
           throw new Error('Failed to start location tracking.');
         }
 
-        // 4. Get initial location
-        const initialLocation = await locationService.getCurrentLocation();
-        if (initialLocation) {
-          setMyLocation(initialLocation);
-        }
+        // 4. Prime initial location in background (do not block session startup)
+        locationService.getCurrentLocation()
+          .then((initialLocation) => {
+            if (initialLocation && isMountedRef.current) {
+              setMyLocation(initialLocation);
+            }
+          })
+          .catch(() => {
+            // non-blocking; tracking callback will still update location shortly
+          });
 
         // 5. Connect WebSocket with real auth token
         DEBUG && console.log('[ActiveSessionScreen] Connecting WebSocket...');
@@ -193,34 +380,40 @@ const ActiveSessionScreen = ({ route, navigation }) => {
           wsBaseUrl
         );
 
+        setSessionId(activeSessionId);
         DEBUG && console.log('[ActiveSessionScreen] WebSocket connected');
+        analyticsService.track('session_launch_success', {
+          elapsed_ms: Date.now() - sessionLaunchStartedAtRef.current,
+          source: inviteToken ? 'invite' : routeSessionId ? 'route' : 'lookup',
+          has_permission: true,
+        });
         setIsLoading(false);
       } catch (error) {
-        console.error('[ActiveSessionScreen] Initialization error:', error);
+        // Avoid LogBox red overlay for expected recoverable startup failures.
+        if (DEBUG) {
+          console.log('[ActiveSessionScreen] Initialization issue:', error?.message || error);
+        }
         if (!isMountedRef.current) return;
 
         const friendlyInitMessage = getInitErrorMessage(error);
         setLocationError(friendlyInitMessage);
+        setInitIssue(classifyInitIssue(error));
+        setWsError(null);
+        analyticsService.track('session_launch_failed', {
+          elapsed_ms: Date.now() - sessionLaunchStartedAtRef.current,
+          source: inviteToken ? 'invite' : routeSessionId ? 'route' : 'lookup',
+          reason: friendlyInitMessage,
+        });
         setIsLoading(false);
-
-        Alert.alert('Unable to Start Meetup', friendlyInitMessage, [
-          {
-            text: 'Go Back',
-            onPress: () => {
-              _cleanup();
-              navigation.goBack();
-            },
-          },
-        ]);
       }
     };
 
     initializeSession();
 
     return () => {
-      // Cleanup will be called separately
+      _cleanup();
     };
-  }, []);
+  }, [initAttempt, routeSessionId, inviteToken, friend, navigation, _subscribeToLocationEvents, _cleanup]);
 
   /**
    * Subscribe to WebSocket events
@@ -250,6 +443,12 @@ const ActiveSessionScreen = ({ route, navigation }) => {
       DEBUG && console.log('[ActiveSessionScreen] Peer location received');
       if (!isMountedRef.current) return;
 
+      peerOfflineAlertedRef.current = false;
+      if (peerOfflineTimerRef.current) {
+        clearTimeout(peerOfflineTimerRef.current);
+        peerOfflineTimerRef.current = null;
+      }
+
       setPeerLocation({
         user_id: payload.user_id,
         lat: payload.lat,
@@ -267,10 +466,32 @@ const ActiveSessionScreen = ({ route, navigation }) => {
       DEBUG && console.log('[ActiveSessionScreen] Presence update:', payload.status);
       if (!isMountedRef.current) return;
 
+      if (payload.status === 'online') {
+        peerOfflineAlertedRef.current = false;
+        if (peerOfflineTimerRef.current) {
+          clearTimeout(peerOfflineTimerRef.current);
+          peerOfflineTimerRef.current = null;
+        }
+        setPeerLastSeenText('Just now');
+        setPeerIsStale(false);
+        return;
+      }
+
       if (payload.status === 'offline') {
-        setPeerLocation(null);
-        setPeerLastSeenText('Offline');
-        Alert.alert('Connection Paused', 'The other person is offline. You can stay here and wait for them to reconnect.');
+        if (peerOfflineTimerRef.current) {
+          clearTimeout(peerOfflineTimerRef.current);
+        }
+
+        peerOfflineTimerRef.current = setTimeout(() => {
+          if (!isMountedRef.current || peerOfflineAlertedRef.current) return;
+
+          peerOfflineAlertedRef.current = true;
+          setPeerLocation(null);
+          setPeerLastSeenText('Offline');
+          setPeerIsStale(true);
+          Alert.alert('Connection Paused', 'The other person may have temporarily lost connection. You can stay here and wait for them to reconnect.');
+        }, 8000);
+        return;
       }
     });
 
@@ -278,7 +499,7 @@ const ActiveSessionScreen = ({ route, navigation }) => {
       DEBUG && console.log('[ActiveSessionScreen] Session ended:', payload.reason);
       if (!isMountedRef.current) return;
 
-      if (payload.reason === 'PROXIMITY_MET' || payload.reason === 'MANUAL_MEET') {
+      if (payload.reason === 'PROXIMITY_REACHED' || payload.reason === 'MANUAL_CONFIRM') {
         if (arrivalTimerRef.current) clearInterval(arrivalTimerRef.current);
         setIsConfirmingArrival(false);
         setMeetingSuccess(true);
@@ -298,6 +519,7 @@ const ActiveSessionScreen = ({ route, navigation }) => {
       }
 
       _cleanup();
+      clearActiveSessionHint();
       Alert.alert('Meetup Ended', getSessionEndMessage(payload.reason), [
         {
           text: 'OK',
@@ -324,6 +546,16 @@ const ActiveSessionScreen = ({ route, navigation }) => {
       setWsError(`Error: ${payload.message}`);
     });
 
+    unsubscribes.onTrackingPaused = locationService.on('trackingPaused', () => {
+      if (!isMountedRef.current) return;
+      setSharingPausedText('Sharing paused (app in background)');
+    });
+
+    unsubscribes.onTrackingResumed = locationService.on('trackingResumed', () => {
+      if (!isMountedRef.current) return;
+      setSharingPausedText('');
+    });
+
     wsEventUnsubscribesRef.current = unsubscribes;
   }, []);
 
@@ -331,7 +563,19 @@ const ActiveSessionScreen = ({ route, navigation }) => {
    * Location streaming loop
    */
   useEffect(() => {
-    if (!myLocation || wsStatus !== 'connected') return;
+    if (!isFocused) {
+      if (locationService.isTracking) {
+        setSharingPausedText('Sharing paused (screen not in view)');
+        locationService.pauseTracking('screen_blurred');
+      }
+      return;
+    }
+
+    if (isFocused && appState === 'active' && locationService.isPaused && !isSharingPaused) {
+      locationService.resumeTracking('screen_focused');
+    }
+
+    if (!myLocation || wsStatus !== 'connected' || !isFocused || appState !== 'active' || isSharingPaused) return;
 
     DEBUG && console.log('[ActiveSessionScreen] Starting location streaming');
 
@@ -355,7 +599,7 @@ const ActiveSessionScreen = ({ route, navigation }) => {
         clearInterval(locationIntervalRef.current);
       }
     };
-  }, [myLocation, wsStatus]);
+  }, [myLocation, wsStatus, isFocused, appState, isSharingPaused]);
 
   /**
    * Helper to safely inject map data into WebView
@@ -510,6 +754,7 @@ const ActiveSessionScreen = ({ route, navigation }) => {
                 });
               }
 
+              clearActiveSessionHint();
               _cleanup();
               navigation.reset({
                 index: 0,
@@ -524,20 +769,17 @@ const ActiveSessionScreen = ({ route, navigation }) => {
         },
       ]
     );
-  }, [sessionId, navigation]);
+  }, [sessionId, navigation, clearActiveSessionHint]);
 
   const handleImHere = useCallback(async () => {
     try {
       setIsConfirmingArrival(true);
       setArrivalCountdown(60);
-      
-      // Fire through realtime WS layer
-      realtimeService.sendImHere();
-      
-      // Fire fallback HTTP endpoint
+
+      // Fire HTTP confirmation endpoint
       if (sessionId) {
         client.post(`/sessions/${sessionId}/im-here`).catch(err => {
-          console.error('[ActiveSessionScreen] Failed fallback im-here:', err);
+          console.error('[ActiveSessionScreen] Failed im-here request:', err);
         });
       }
 
@@ -559,11 +801,95 @@ const ActiveSessionScreen = ({ route, navigation }) => {
     }
   }, [sessionId]);
 
+  const handleShareInvite = useCallback(async () => {
+    if (!sessionId) {
+      Alert.alert('No Active Meetup', 'Start the meetup before sharing an invite.');
+      return;
+    }
+
+    try {
+      setIsSharingInvite(true);
+      const inviteResponse = await client.post(`/sessions/${sessionId}/invite`);
+      const token = inviteResponse?.data?.invite_token;
+
+      if (!token) {
+        throw new Error('Invite token missing');
+      }
+
+      const inviteUrl = `${ExpoLinking.createURL('invite')}?token=${encodeURIComponent(token)}`;
+      const shareText = `Join my meetup on MeetUp: ${inviteUrl}`;
+      const whatsappUrl = `whatsapp://send?text=${encodeURIComponent(shareText)}`;
+
+      try {
+        if (await Linking.canOpenURL(whatsappUrl)) {
+          await Linking.openURL(whatsappUrl);
+          return;
+        }
+      } catch (linkError) {
+        DEBUG && console.log('[ActiveSessionScreen] WhatsApp share fallback:', linkError?.message);
+      }
+
+      await Share.share({
+        message: shareText,
+        title: 'MeetUp invite',
+      });
+    } catch (error) {
+      console.error('[ActiveSessionScreen] Share invite error:', error);
+      Alert.alert('Could Not Share Invite', 'Please try again in a moment.');
+    } finally {
+      setIsSharingInvite(false);
+    }
+  }, [sessionId]);
+
+  const handleTogglePauseSharing = useCallback(async () => {
+    try {
+      if (!isSharingPaused) {
+        setIsSharingPaused(true);
+        setSharingPausedText('Sharing paused by you');
+        if (locationIntervalRef.current) {
+          clearInterval(locationIntervalRef.current);
+          locationIntervalRef.current = null;
+        }
+        locationService.pauseTracking('manual_pause');
+        analyticsService.track('sharing_paused', {
+          sessionId,
+          source: 'manual',
+        });
+        Alert.alert('Sharing Paused', 'Your location is no longer being shared.');
+        return;
+      }
+
+      setIsSharingPaused(false);
+      setSharingPausedText('');
+      const resumed = await locationService.resumeTracking('manual_resume');
+      if (!resumed) {
+        throw new Error('Unable to resume location sharing.');
+      }
+      analyticsService.track('sharing_resumed', {
+        sessionId,
+        source: 'manual',
+      });
+      Alert.alert('Sharing Resumed', 'Your location is being shared again.');
+    } catch (error) {
+      console.error('[ActiveSessionScreen] Toggle pause sharing error:', error);
+      setLocationError(error?.message || 'Could not change sharing state right now.');
+    }
+  }, [isSharingPaused, sessionId]);
+
   /**
    * Cleanup all resources
    */
   const _cleanup = useCallback(() => {
     DEBUG && console.log('[ActiveSessionScreen] Cleaning up resources...');
+
+    Object.values(locationEventUnsubscribesRef.current).forEach((unsub) => {
+      try {
+        unsub?.();
+      } catch (e) {
+        console.error('Error unsubscribing location event:', e);
+      }
+    });
+    locationEventUnsubscribesRef.current = {};
 
     // Stop tracking
     locationService.stopTracking();
@@ -584,6 +910,12 @@ const ActiveSessionScreen = ({ route, navigation }) => {
     if (arrivalTimerRef.current) {
       clearInterval(arrivalTimerRef.current);
     }
+    if (peerOfflineTimerRef.current) {
+      clearTimeout(peerOfflineTimerRef.current);
+      peerOfflineTimerRef.current = null;
+    }
+
+    setInitIssue(null);
 
     // Unsubscribe from WS events
     Object.values(wsEventUnsubscribesRef.current).forEach((unsub) => {
@@ -599,6 +931,19 @@ const ActiveSessionScreen = ({ route, navigation }) => {
     realtimeService.disconnect();
 
     DEBUG && console.log('[ActiveSessionScreen] Cleanup complete');
+  }, []);
+
+  const handleRetrySession = useCallback(async () => {
+    _cleanup();
+    setLocationError(null);
+    setWsError(null);
+    setInitAttempt((value) => value + 1);
+  }, [_cleanup]);
+
+  const handleOpenSettings = useCallback(() => {
+    Linking.openSettings().catch((error) => {
+      console.warn('[ActiveSessionScreen] Failed to open settings:', error);
+    });
   }, []);
 
   /**
@@ -777,6 +1122,40 @@ const ActiveSessionScreen = ({ route, navigation }) => {
     );
   }
 
+  // Full-screen recovery card when no session exists
+  if (initIssue && !sessionId) {
+    return (
+      <SafeAreaView style={s.container}>
+        <View style={s.initIssueContainer}>
+          <View style={s.initIssueCard}>
+            <Text style={s.initIssueTitle}>{initIssue.title}</Text>
+            <Text style={s.initIssueText}>{initIssue.message}</Text>
+
+            <TouchableOpacity
+              style={s.initIssuePrimaryButton}
+              onPress={initIssue.kind === 'permission' ? async () => {
+                const granted = await locationService.requestPermission();
+                if (granted) {
+                  await handleRetrySession();
+                }
+              } : handleRetrySession}
+            >
+              <Text style={s.initIssuePrimaryText}>
+                {initIssue.kind === 'permission' ? 'Grant Location Access' : 'Retry'}
+              </Text>
+            </TouchableOpacity>
+
+            {(initIssue.kind === 'permission' || initIssue.kind === 'services') && (
+              <TouchableOpacity style={s.initIssueSecondaryButton} onPress={handleOpenSettings}>
+                <Text style={s.initIssueSecondaryText}>Open Settings</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={s.container}>
       {/* Leaflet Map via WebView */}
@@ -822,6 +1201,22 @@ const ActiveSessionScreen = ({ route, navigation }) => {
       {(locationError || wsError) && (
         <View style={s.errorBanner}>
           <Text style={s.errorText}>{locationError || wsError}</Text>
+          {(wsStatus === 'failed' || initIssue?.kind === 'network') && (
+            <TouchableOpacity style={s.errorActionButton} onPress={handleRetrySession}>
+              <Text style={s.errorActionText}>Retry</Text>
+            </TouchableOpacity>
+          )}
+          {initIssue?.kind === 'permission' && (
+            <TouchableOpacity style={s.errorActionButton} onPress={handleOpenSettings}>
+              <Text style={s.errorActionText}>Settings</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      )}
+
+      {!!sharingPausedText && (
+        <View style={s.pauseBanner}>
+          <Text style={s.pauseText}>{sharingPausedText}</Text>
         </View>
       )}
 
@@ -856,6 +1251,23 @@ const ActiveSessionScreen = ({ route, navigation }) => {
           </View>
         )}
 
+        <View style={s.controlButtons}>
+          <TouchableOpacity
+            style={[s.controlButton, isSharingPaused && s.controlButtonActive]}
+            onPress={handleTogglePauseSharing}
+          >
+            <Text style={s.controlButtonIcon}>{isSharingPaused ? '▶️' : '⏸️'}</Text>
+            <Text style={[s.controlButtonLabel, isSharingPaused && s.controlButtonLabelActive]}>
+              {isSharingPaused ? 'Resume Sharing' : 'Pause Sharing'}
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={s.controlButton} onPress={handleEndSession}>
+            <Text style={s.controlButtonIcon}>🛑</Text>
+            <Text style={s.controlButtonLabel}>Stop Sharing</Text>
+          </TouchableOpacity>
+        </View>
+
         {peerLocation && (
           <View style={s.modeTabs}>
             {Object.values(TransportMode).map(mode => (
@@ -874,18 +1286,56 @@ const ActiveSessionScreen = ({ route, navigation }) => {
           </View>
         )}
 
+        <TouchableOpacity
+          style={[s.shareInviteButton, isSharingInvite && s.buttonDisabled]}
+          onPress={handleShareInvite}
+          disabled={isSharingInvite || !sessionId}
+        >
+          <Text style={s.shareInviteText}>{isSharingInvite ? 'Preparing Invite...' : 'Share Invite'}</Text>
+        </TouchableOpacity>
+
         {routeDistance != null && routeDistance <= 50 && (
           <TouchableOpacity style={s.imHereButton} onPress={handleImHere}>
             <Text style={s.imHereText}>I'm Here!</Text>
           </TouchableOpacity>
         )}
-
-        <TouchableOpacity
-          style={[s.endSessionButton, isStopping && s.buttonDisabled]}
-          onPress={handleEndSession} disabled={isStopping}>
-          <Text style={s.endSessionText}>{isStopping ? 'Ending...' : 'End Session'}</Text>
-        </TouchableOpacity>
       </View>
+
+      {/* Recovery Modal - appears on top of active session when there's a permission/service/network issue */}
+      {initIssue && sessionId && (
+        <Modal visible={true} transparent animationType="fade">
+          <View style={s.modalOverlay}>
+            <View style={s.initIssueCard}>
+              <Text style={s.initIssueTitle}>{initIssue.title}</Text>
+              <Text style={s.initIssueText}>{initIssue.message}</Text>
+
+              <TouchableOpacity
+                style={s.initIssuePrimaryButton}
+                onPress={initIssue.kind === 'permission' ? async () => {
+                  const granted = await locationService.requestPermission();
+                  if (granted) {
+                    await handleRetrySession();
+                  }
+                } : handleRetrySession}
+              >
+                <Text style={s.initIssuePrimaryText}>
+                  {initIssue.kind === 'permission' ? 'Grant Location Access' : 'Retry'}
+                </Text>
+              </TouchableOpacity>
+
+              {(initIssue.kind === 'permission' || initIssue.kind === 'services') && (
+                <TouchableOpacity style={s.initIssueSecondaryButton} onPress={handleOpenSettings}>
+                  <Text style={s.initIssueSecondaryText}>Open Settings</Text>
+                </TouchableOpacity>
+              )}
+
+              <TouchableOpacity style={s.initIssueLinkButton} onPress={() => setInitIssue(null)}>
+                <Text style={s.initIssueLinkText}>Dismiss</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </Modal>
+      )}
 
       {/* Confirmation Modal */}
       <Modal visible={isConfirmingArrival} transparent animationType="fade">
@@ -923,6 +1373,46 @@ const makeStyles = (c) => StyleSheet.create({
   center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: c.bg },
   loadingText: { marginTop: 12, ...Font.body, color: c.textSecondary },
   map: { flex: 1 },
+  initIssueContainer: {
+    flex: 1,
+    padding: Spacing.lg,
+    justifyContent: 'center',
+    backgroundColor: c.bg,
+  },
+  initIssueCard: {
+    backgroundColor: c.surface,
+    borderWidth: 1,
+    borderColor: c.border,
+    borderRadius: Radius.xl,
+    padding: Spacing.lg,
+    shadowColor: c.textPrimary,
+    shadowOpacity: 0.08,
+    shadowOffset: { width: 0, height: 10 },
+    shadowRadius: 18,
+    elevation: 5,
+  },
+  initIssueTitle: { ...Font.h3, color: c.textPrimary, marginBottom: 8 },
+  initIssueText: { ...Font.body, color: c.textSecondary, marginBottom: Spacing.md, lineHeight: 22 },
+  initIssuePrimaryButton: {
+    backgroundColor: c.textPrimary,
+    borderRadius: Radius.md,
+    paddingVertical: 14,
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  initIssuePrimaryText: { color: c.bg, fontWeight: '800', fontSize: 15 },
+  initIssueSecondaryButton: {
+    backgroundColor: c.surfaceElevated,
+    borderWidth: 1,
+    borderColor: c.border,
+    borderRadius: Radius.md,
+    paddingVertical: 14,
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  initIssueSecondaryText: { color: c.textPrimary, fontWeight: '700', fontSize: 14 },
+  initIssueLinkButton: { paddingVertical: 8, alignItems: 'center' },
+  initIssueLinkText: { color: c.textMuted, fontWeight: '700', fontSize: 13 },
 
   statusBadge: {
     position: 'absolute', top: 16, left: 16,
@@ -945,8 +1435,37 @@ const makeStyles = (c) => StyleSheet.create({
     position: 'absolute', bottom: 130, left: 16, right: 16,
     backgroundColor: c.accentBg, padding: 12, borderRadius: Radius.sm,
     borderColor: c.accent, borderWidth: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
   },
   errorText: { color: c.accentLight, fontSize: 13, fontWeight: '500' },
+  errorActionButton: {
+    backgroundColor: c.surface,
+    borderRadius: Radius.pill,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+  },
+  errorActionText: { color: c.textPrimary, fontWeight: '800', fontSize: 12 },
+
+  pauseBanner: {
+    position: 'absolute',
+    top: 64,
+    left: 16,
+    right: 16,
+    backgroundColor: c.surfaceElevated,
+    borderColor: c.border,
+    borderWidth: 1,
+    borderRadius: Radius.sm,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+  },
+  pauseText: {
+    color: c.textPrimary,
+    fontSize: 13,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
 
   bottomPanel: {
     backgroundColor: c.surface,
@@ -967,6 +1486,39 @@ const makeStyles = (c) => StyleSheet.create({
     flexDirection: 'row',
     gap: Spacing.sm,
     marginBottom: Spacing.md,
+  },
+  controlButtons: {
+    flexDirection: 'row',
+    gap: Spacing.sm,
+    marginBottom: Spacing.md,
+  },
+  controlButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: c.surfaceElevated,
+    borderWidth: 1,
+    borderColor: c.border,
+    borderRadius: Radius.md,
+    paddingVertical: 12,
+    paddingHorizontal: 10,
+  },
+  controlButtonActive: {
+    backgroundColor: c.textPrimary,
+    borderColor: c.textPrimary,
+  },
+  controlButtonIcon: {
+    fontSize: 14,
+    marginRight: 6,
+  },
+  controlButtonLabel: {
+    ...Font.caption,
+    color: c.textPrimary,
+    fontWeight: '800',
+  },
+  controlButtonLabelActive: {
+    color: c.bg,
   },
   statPill: {
     flex: 1,
@@ -1018,6 +1570,17 @@ const makeStyles = (c) => StyleSheet.create({
     shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8, elevation: 4,
   },
   imHereText: { color: c.bg, fontSize: 16, fontWeight: '800' },
+  shareInviteButton: {
+    backgroundColor: c.surfaceElevated,
+    borderWidth: 1,
+    borderColor: c.border,
+    borderRadius: Radius.md,
+    paddingVertical: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: Spacing.sm,
+  },
+  shareInviteText: { color: c.textPrimary, fontSize: 15, fontWeight: '700', letterSpacing: 0.2 },
   endSessionButton: {
     borderWidth: 1, borderColor: c.accent,
     borderRadius: Radius.md, paddingVertical: 14,

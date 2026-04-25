@@ -14,7 +14,7 @@ const ForgotPasswordScreen = ({ navigation }) => {
 
     const handleRequestReset = async () => {
         if (!email.trim()) {
-            Alert.alert('Email Required', 'Please enter your email address.');
+            Alert.alert('Error', 'Please enter your email address');
             return;
         }
 
@@ -29,13 +29,13 @@ const ForgotPasswordScreen = ({ navigation }) => {
             // But Supabase typically uses links. If using OTP/UpdateUser:
             // setStep(2); 
         } catch (error) {
-            Alert.alert('Could Not Send Reset Link', 'Please check your email and try again.');
+            Alert.alert('Error', error.message);
         }
     };
 
     const handleUpdatePassword = async () => {
         if (!newPassword || newPassword.length < 6) {
-            Alert.alert('Password Too Short', 'Use at least 6 characters.');
+            Alert.alert('Error', 'Password must be at least 6 characters');
             return;
         }
 
@@ -47,7 +47,7 @@ const ForgotPasswordScreen = ({ navigation }) => {
                 [{ text: 'OK', onPress: () => navigation.navigate('Login') }]
             );
         } catch (error) {
-            Alert.alert('Could Not Update Password', 'Please try again in a moment.');
+            Alert.alert('Error', error.message);
         }
     };
 

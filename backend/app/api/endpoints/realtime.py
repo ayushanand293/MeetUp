@@ -30,7 +30,7 @@ from app.realtime.schemas import (
 )
 
 from fastapi.concurrency import run_in_threadpool
-from app.api.endpoints.realtime_helpers import end_session_sync
+from app.api.endpoints.realtime_helpers import end_session_sync, is_session_participant_sync
 from app.core.proximity import adaptive_threshold_m, haversine_distance_m, should_auto_end
 
 logger = logging.getLogger(__name__)
@@ -40,6 +40,13 @@ RATE_LIMIT_MESSAGES_PER_SEC = 10
 RATE_LIMIT_WINDOW_SEC = 1
 
 router = APIRouter()
+LAST_LOCATION_TTL_SECONDS = 600
+
+
+async def _store_last_known_location(redis_client, session_uuid: UUID, user_id: UUID, payload) -> None:
+    loc_payload = payload.model_dump()
+    loc_payload["timestamp"] = loc_payload["timestamp"].isoformat()
+    await redis_client.setex(f"loc:{session_uuid}:{user_id}", LAST_LOCATION_TTL_SECONDS, json.dumps(loc_payload))
 
 
 @router.websocket("/meetup")
@@ -83,6 +90,12 @@ async def websocket_endpoint(
     try:
         session_uuid = UUID(session_id)
     except ValueError:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+
+    is_participant = await run_in_threadpool(is_session_participant_sync, session_uuid, user_id)
+    if not is_participant:
+        logger.warning(f"WebSocket Auth Failed: user {user_id} is not an active participant in session {session_uuid}")
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
 
@@ -169,9 +182,7 @@ async def websocket_endpoint(
                     now_ts = datetime.utcnow().timestamp()
                     await redis_client.setex(last_update_key, 3, str(now_ts))
                     
-                    loc_payload = payload.model_dump()
-                    loc_payload["timestamp"] = loc_payload["timestamp"].isoformat()
-                    await redis_client.setex(f"loc:{session_uuid}:{user_id}", 120, json.dumps(loc_payload))
+                    await _store_last_known_location(redis_client, session_uuid, user_id, payload)
 
                     # 11. Geo-Intelligence Proximity Check (Week 5)
                     cursor = 0
@@ -232,7 +243,7 @@ async def websocket_endpoint(
                         end_event = EndSessionEvent(**event_data)
                         reason = end_event.payload.reason
                         ended = await run_in_threadpool(end_session_sync, session_uuid, reason)
-                        if ended or True:  # the test expects it to work even if db fails (if mocked)
+                        if ended:
                             ended_evt = SessionEndedEvent(
                                 payload=SessionEndedPayload(
                                     reason=reason,
@@ -240,6 +251,14 @@ async def websocket_endpoint(
                                 )
                             )
                             await manager.broadcast(session_uuid, ended_evt.model_dump_json())
+                        else:
+                            error_event = ErrorEvent(
+                                payload=ErrorPayload(
+                                    code="SESSION_END_FAILED",
+                                    message="Session is not active or could not be ended",
+                                )
+                            )
+                            await websocket.send_text(error_event.model_dump_json())
                     except Exception as e:
                         logger.error(f"Error handling end_session: {e}")
 

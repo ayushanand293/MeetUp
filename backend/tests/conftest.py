@@ -18,7 +18,7 @@ def db():
     db = SessionLocal()
     try:
         # Clean tables before each test
-        db.execute(text("TRUNCATE TABLE users, meet_requests, sessions, session_participants, audit_events CASCADE"))
+        db.execute(text("TRUNCATE TABLE users, meet_requests, sessions, session_participants, audit_events, analytics_events CASCADE"))
         db.commit()
         yield db
     finally:

@@ -3,6 +3,7 @@ import requests as http_requests
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt import PyJWTError
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -83,7 +84,14 @@ def get_current_user(
         # Auto-create user on first login
         user = User(id=user_id, email=email)
         db.add(user)
-        db.commit()
-        db.refresh(user)
+        try:
+            db.commit()
+            db.refresh(user)
+        except IntegrityError:
+            # Concurrent request may have created the same user row.
+            db.rollback()
+            user = db.query(User).filter(User.id == user_id).first()
+            if not user:
+                raise HTTPException(status_code=500, detail="Failed to resolve user record")
 
     return user

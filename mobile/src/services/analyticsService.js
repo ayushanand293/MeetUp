@@ -8,6 +8,7 @@
  */
 
 import client from '../api/client';
+import { CLIENT_ANALYTICS_ENABLED } from '../config';
 
 const DEBUG = process.env.NODE_ENV !== 'production';
 
@@ -28,11 +29,22 @@ const sanitize = (data = {}) => {
 
 const track = async (eventName, metadata = {}) => {
   if (!eventName) return;
+  if (!CLIENT_ANALYTICS_ENABLED) return;
+
+  const { session_id, sessionId, ...properties } = sanitize(metadata);
+  const resolvedSessionId = session_id || sessionId || null;
 
   const payload = {
-    event: eventName,
-    ts: new Date().toISOString(),
-    metadata: sanitize(metadata),
+    events: [
+      {
+        event_name: eventName,
+        session_id: resolvedSessionId,
+        properties: {
+          ...properties,
+          ts: new Date().toISOString(),
+        },
+      },
+    ],
   };
 
   if (DEBUG) {

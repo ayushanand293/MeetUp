@@ -9,36 +9,12 @@ import { useFocusEffect } from '@react-navigation/native';
 import client from '../api/client';
 import { useTheme, Spacing, Radius, Font, anim } from '../theme';
 
-const MOCK_HISTORY = [
-    {
-        session_id: 'mock-session-1',
-        co_participant_id: 'mock-user-sarah',
-        co_participant_name: 'Sarah',
-        co_participant_email: 'sarah@test.com',
-        ended_at: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
-    },
-    {
-        session_id: 'mock-session-2',
-        co_participant_id: 'mock-user-marcus',
-        co_participant_name: 'Marcus',
-        co_participant_email: 'marcus@test.com',
-        ended_at: new Date(Date.now() - 26 * 60 * 60 * 1000).toISOString(),
-    },
-    {
-        session_id: 'mock-session-3',
-        co_participant_id: 'mock-user-jordan',
-        co_participant_name: 'Jordan',
-        co_participant_email: 'jordan@test.com',
-        ended_at: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
-    },
-];
-
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const TIMELINE_ITEM_WIDTH = Math.max(132, Math.floor((SCREEN_WIDTH - 92) / 2));
 
-const HomeScreen = ({ navigation }) => {
+const HomeScreen = ({ navigation, route }) => {
     const { colors } = useTheme();
-    const { user } = useAuth();
+    const { user, activeSessionHint } = useAuth();
     const [activeSession, setActiveSession] = useState(null);
     const [incomingRequests, setIncomingRequests] = useState([]);
     const [outgoingRequests, setOutgoingRequests] = useState([]);
@@ -48,7 +24,13 @@ const HomeScreen = ({ navigation }) => {
     const [history, setHistory] = useState([]);
     const pollRef = useRef(null);
     const activeSessionIdRef = useRef(null);
-    const lastAutoRoutedSessionRef = useRef(null);
+    const lastKnownActiveSessionRef = useRef(null);
+    const missingActiveSessionPollsRef = useRef(0);
+    const outgoingPendingCountRef = useRef(0);
+    const outgoingPendingRequestIdsRef = useRef([]);
+    const outgoingPendingPeerHintRef = useRef(null);
+    const acceptanceAutoJoinSessionRef = useRef(null);
+    const awaitingSenderJoinRef = useRef(false);
     const [now, setNow] = useState(Date.now());
 
     // Entrance
@@ -98,11 +80,27 @@ const HomeScreen = ({ navigation }) => {
         return () => clearInterval(t);
     }, []);
 
+    useEffect(() => {
+        const watchId = route?.params?.watchOutgoingRequestId;
+        const shouldWatch = route?.params?.watchOutgoingAcceptance;
+        if (!watchId || !shouldWatch) return;
+
+        // Deterministically arm sender join recovery after leaving RequestScreen.
+        awaitingSenderJoinRef.current = true;
+        outgoingPendingRequestIdsRef.current = [String(watchId)];
+
+        // Clear one-shot route params to avoid re-arming indefinitely.
+        navigation.setParams({
+            watchOutgoingRequestId: undefined,
+            watchOutgoingAcceptance: undefined,
+        });
+    }, [route?.params?.watchOutgoingRequestId, route?.params?.watchOutgoingAcceptance, navigation]);
+
     const fetchData = useCallback(async (silent = false) => {
         if (!silent) setIsRefreshing(true);
         try {
-            const [sRes, oRes, iRes] = await Promise.allSettled([
-                client.get('/sessions/active'), client.get('/requests/outgoing'), client.get('/requests/pending'),
+            const [sRes, oRes, iRes, hRes] = await Promise.allSettled([
+                client.get('/sessions/active'), client.get('/requests/outgoing'), client.get('/requests/pending'), client.get('/sessions/history'),
             ]);
 
             if (sRes.status === 'rejected' && oRes.status === 'rejected' && iRes.status === 'rejected') {
@@ -115,30 +113,116 @@ const HomeScreen = ({ navigation }) => {
             const nextSessionId = session?.session_id || null;
             const prevSessionId = activeSessionIdRef.current;
 
-            // Avoid state churn when session identity is unchanged.
-            if (nextSessionId !== prevSessionId) {
+            // Keep active session card stable across brief API null responses.
+            if (session) {
+                missingActiveSessionPollsRef.current = 0;
+                lastKnownActiveSessionRef.current = session;
                 setActiveSession(session);
                 activeSessionIdRef.current = nextSessionId;
+            } else {
+                missingActiveSessionPollsRef.current += 1;
+                if (missingActiveSessionPollsRef.current >= 3) {
+                    lastKnownActiveSessionRef.current = null;
+                    setActiveSession(null);
+                    activeSessionIdRef.current = null;
+                } else if (lastKnownActiveSessionRef.current) {
+                    setActiveSession(lastKnownActiveSessionRef.current);
+                }
             }
 
-            setOutgoingRequests(oRes.status === 'fulfilled' ? oRes.value.data : []);
-            setIncomingRequests(iRes.status === 'fulfilled' ? iRes.value.data : []);
+            const nextOutgoing = oRes.status === 'fulfilled' ? oRes.value.data : [];
+            const nextOutgoingPending = nextOutgoing.filter((r) => String(r?.status || 'PENDING') === 'PENDING');
+            const nextOutgoingPendingIds = nextOutgoingPending.map((r) => String(r.id));
+            const nextOutgoingPendingCount = nextOutgoing.filter((r) => String(r?.status || 'PENDING') === 'PENDING').length;
 
-            // Auto-open active session as soon as it appears (sender/receiver instant jump behavior)
+            if (nextOutgoingPending.length > 0) {
+                const firstPending = nextOutgoingPending[0];
+                outgoingPendingPeerHintRef.current = {
+                    id: firstPending.receiver_id,
+                    display_name: firstPending.receiver_name || 'Friend',
+                    name: firstPending.receiver_name || 'Friend',
+                    email: firstPending.receiver_email,
+                };
+            }
+
+            // Sender flow signal: pending outgoing disappeared (likely accepted).
+            if (outgoingPendingCountRef.current > 0 && nextOutgoingPendingCount === 0) {
+                awaitingSenderJoinRef.current = true;
+            }
+
+            // Auto-join sender once active session becomes visible, even if it appears a tick later.
             if (
+                awaitingSenderJoinRef.current &&
                 nextSessionId &&
-                nextSessionId !== lastAutoRoutedSessionRef.current
+                acceptanceAutoJoinSessionRef.current !== nextSessionId
             ) {
-                lastAutoRoutedSessionRef.current = nextSessionId;
+                awaitingSenderJoinRef.current = false;
+                acceptanceAutoJoinSessionRef.current = nextSessionId;
                 clearInterval(pollRef.current);
-                navigation.navigate('ActiveSession', { sessionId: nextSessionId });
+                navigation.navigate('ActiveSession', {
+                    sessionId: nextSessionId,
+                    friend: session?.peer_id
+                        ? {
+                            id: session.peer_id,
+                            display_name: session.peer_name || 'Friend',
+                            name: session.peer_name || 'Friend',
+                        }
+                        : outgoingPendingPeerHintRef.current || undefined,
+                });
                 return;
             }
 
-            if (nextSessionId && !prevSessionId) {
+            // Fallback: if pending vanished but /sessions/active is still empty, recover via accepted request id.
+            if (awaitingSenderJoinRef.current && !nextSessionId) {
+                const fallbackRequestId = outgoingPendingRequestIdsRef.current[0];
+                if (fallbackRequestId) {
+                    try {
+                        const recoverRes = await client.post(`/sessions/from-request/${fallbackRequestId}`);
+                        const recoveredSessionId = recoverRes?.data?.session_id;
+                        if (recoveredSessionId && acceptanceAutoJoinSessionRef.current !== recoveredSessionId) {
+                            awaitingSenderJoinRef.current = false;
+                            acceptanceAutoJoinSessionRef.current = recoveredSessionId;
+                            lastKnownActiveSessionRef.current = {
+                                session_id: recoveredSessionId,
+                                peer_name: outgoingPendingPeerHintRef.current?.display_name || 'Friend',
+                                peer_id: outgoingPendingPeerHintRef.current?.id || null,
+                            };
+                            activeSessionIdRef.current = recoveredSessionId;
+                            clearInterval(pollRef.current);
+                            navigation.navigate('ActiveSession', {
+                                sessionId: recoveredSessionId,
+                                friend: outgoingPendingPeerHintRef.current || undefined,
+                            });
+                            return;
+                        }
+                    } catch (err) {
+                        const status = err?.response?.status;
+                        if (status === 400 || status === 403 || status === 404 || status === 410) {
+                            // Not recoverable from this request id; stop retrying.
+                            awaitingSenderJoinRef.current = false;
+                        }
+                    }
+                }
+            }
+
+            outgoingPendingCountRef.current = nextOutgoingPendingCount;
+            outgoingPendingRequestIdsRef.current = nextOutgoingPendingIds;
+
+            setOutgoingRequests(nextOutgoing);
+            setIncomingRequests(iRes.status === 'fulfilled' ? iRes.value.data : []);
+            setHistory(hRes.status === 'fulfilled' ? hRes.value.data?.history || [] : []);
+
+            // Show/refresh banner animation when there's an active session (new or returning)
+            if (nextSessionId) {
                 Animated.parallel([
                     Animated.spring(bannerSlide, { toValue: 0, useNativeDriver: true, tension: 80 }),
                     Animated.timing(bannerOp, { toValue: 1, duration: 300, useNativeDriver: true }),
+                ]).start();
+            } else {
+                // Hide banner if session ended
+                Animated.parallel([
+                    Animated.spring(bannerSlide, { toValue: -80, useNativeDriver: true, tension: 80 }),
+                    Animated.timing(bannerOp, { toValue: 0, duration: 300, useNativeDriver: true }),
                 ]).start();
             }
         } catch (_) {
@@ -165,24 +249,12 @@ const HomeScreen = ({ navigation }) => {
     const pending = outgoingRequests.filter(r => r.status === 'PENDING');
     const incomingPending = incomingRequests;
     const expiredCount = pending.filter(r => countdown(r.expires_at) === '00:00').length;
+    const displayActiveSession = activeSession || lastKnownActiveSessionRef.current || activeSessionHint || (activeSessionIdRef.current
+        ? { session_id: activeSessionIdRef.current, peer_name: 'Friend' }
+        : null);
     const displayName = user?.email?.split('@')[0] || 'You';
     const ambientUp = ambientFloat.interpolate({ inputRange: [0, 1], outputRange: [0, -14] });
     const ambientDown = ambientFloat.interpolate({ inputRange: [0, 1], outputRange: [0, 12] });
-
-    // Fetch session history
-    useEffect(() => {
-        const fetchHistory = async () => {
-            try {
-                const res = await client.get('/sessions/history');
-                const historyItems = res.data?.history || [];
-                setHistory(historyItems.length ? historyItems : MOCK_HISTORY);
-            } catch (err) {
-                console.log('Could not fetch history', err);
-                setHistory(MOCK_HISTORY);
-            }
-        };
-        fetchHistory();
-    }, []);
 
     const timelineStories = useMemo(() => {
         return history.filter((item) => !!item.co_participant_name).slice(0, 16);
@@ -314,8 +386,8 @@ const HomeScreen = ({ navigation }) => {
             )}
 
             {/* Active session banner */}
-            {activeSession && (
-                <Animated.View style={{ transform: [{ translateY: bannerSlide }], opacity: bannerOp, marginBottom: Spacing.lg }}>
+            {displayActiveSession && (
+                <View style={{ marginBottom: Spacing.lg }}>
                     <TouchableOpacity
                         style={{
                             backgroundColor: colors.surface,
@@ -329,7 +401,19 @@ const HomeScreen = ({ navigation }) => {
                             shadowRadius: 18,
                             elevation: 5,
                         }}
-                        onPress={() => { clearInterval(pollRef.current); navigation.navigate('ActiveSession', { sessionId: activeSession.session_id }); }}>
+                        onPress={() => {
+                            clearInterval(pollRef.current);
+                            navigation.navigate('ActiveSession', {
+                                sessionId: displayActiveSession.session_id,
+                                friend: displayActiveSession?.peer_id
+                                    ? {
+                                        id: displayActiveSession.peer_id,
+                                        display_name: displayActiveSession.peer_name || 'Friend',
+                                        name: displayActiveSession.peer_name || 'Friend',
+                                    }
+                                    : undefined,
+                            });
+                        }}>
                         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
                             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                                 <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: colors.textPrimary, marginRight: 8 }} />
@@ -349,7 +433,7 @@ const HomeScreen = ({ navigation }) => {
                         <Text style={[Font.subtitle, { color: colors.textPrimary, marginBottom: 2 }]}>Active Session</Text>
                         <Text style={[Font.body, { color: colors.textSecondary, fontSize: 13 }]}>Tap to rejoin the map</Text>
                     </TouchableOpacity>
-                </Animated.View>
+                </View>
             )}
 
             {/* Pending requests */}
@@ -413,7 +497,7 @@ const HomeScreen = ({ navigation }) => {
                 </Animated.View>
             )}
 
-            {hasLoadedOnce && !activeSession && pending.length === 0 && incomingPending.length === 0 && (
+            {hasLoadedOnce && !displayActiveSession && pending.length === 0 && incomingPending.length === 0 && (
                 <Animated.View style={{ opacity: cardsOp, transform: [{ translateY: cardsY }], marginBottom: Spacing.lg }}>
                     <View style={{
                         backgroundColor: colors.surface,

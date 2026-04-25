@@ -9,9 +9,12 @@ from uuid import UUID
 from app.core.database import SessionLocal
 from app.core.metrics import track_session_ended
 from app.core.redis import get_redis
+from app.models.meet_request import MeetRequest
 from app.models.session import ParticipantStatus, Session, SessionParticipant, SessionStatus
 
 DEFAULT_STALE_AFTER_MINUTES = 5
+SESSION_RETENTION_DAYS = 30
+REQUEST_RETENTION_DAYS = 30
 
 
 def _parse_iso_timestamp(value: str | None) -> datetime | None:
@@ -120,5 +123,54 @@ async def expire_stale_sessions(stale_after_minutes: int = DEFAULT_STALE_AFTER_M
     return {
         "sessions_scanned": sessions_scanned,
         "sessions_expired": sessions_expired,
+        "redis_keys_deleted": redis_keys_deleted,
+    }
+
+
+async def purge_retention_records(
+    session_retention_days: int = SESSION_RETENTION_DAYS,
+    request_retention_days: int = REQUEST_RETENTION_DAYS,
+) -> dict[str, int]:
+    """Delete ended sessions and stale requests older than the retention window."""
+    now = datetime.utcnow()
+    session_cutoff = now - timedelta(days=session_retention_days)
+    request_cutoff = now - timedelta(days=request_retention_days)
+
+    db = SessionLocal()
+    redis_client = await get_redis()
+
+    sessions_deleted = 0
+    requests_deleted = 0
+    redis_keys_deleted = 0
+
+    try:
+        old_sessions = (
+            db.query(Session)
+            .filter(Session.status == SessionStatus.ENDED, Session.ended_at.isnot(None), Session.ended_at < session_cutoff)
+            .all()
+        )
+
+        for session in old_sessions:
+            redis_keys_deleted += await _cleanup_session_keys(redis_client, session.id)
+            db.query(SessionParticipant).filter(SessionParticipant.session_id == session.id).delete(synchronize_session=False)
+            db.query(Session).filter(Session.id == session.id).delete(synchronize_session=False)
+            sessions_deleted += 1
+
+        requests_deleted = (
+            db.query(MeetRequest)
+            .filter(MeetRequest.created_at.isnot(None), MeetRequest.created_at < request_cutoff)
+            .delete(synchronize_session=False)
+        )
+
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+    return {
+        "sessions_deleted": sessions_deleted,
+        "requests_deleted": requests_deleted,
         "redis_keys_deleted": redis_keys_deleted,
     }
