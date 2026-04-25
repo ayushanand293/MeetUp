@@ -226,6 +226,7 @@ class RealtimeService extends EventEmitter {
         lon,
         accuracy_m,
         timestamp: new Date().toISOString(),
+        client_ts_ms: now,
       },
     };
 

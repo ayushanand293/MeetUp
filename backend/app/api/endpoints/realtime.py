@@ -10,6 +10,7 @@ from jwt import PyJWTError
 
 from app.core.config import settings
 from app.core.metrics import (
+    track_location_propagation_latency_ms,
     track_message_received,
     track_rate_limit_hit,
     track_validation_error,
@@ -178,7 +179,19 @@ async def websocket_endpoint(
                     # Broadcast to everyone in session EXCEPT sender
                     await manager.broadcast(session_uuid, peer_event.model_dump_json(), exclude_user=user_id)
 
-                    # 10. Write Location and Throttle tracking to Redis (Week 4)
+                    # Emit location_propagation_latency_ms: time from payload timestamp to broadcast
+                    _now_dt = datetime.utcnow()
+                    _payload_ts = payload.timestamp
+                    # payload.timestamp is already a validated datetime; make both naive for subtraction
+                    if _payload_ts.tzinfo is not None:
+                        _payload_ts = _payload_ts.replace(tzinfo=None)
+                    _prop_latency_ms = max(0.0, (_now_dt - _payload_ts).total_seconds() * 1000)
+                    track_location_propagation_latency_ms(
+                        session_id=str(session_uuid),
+                        user_id=str(user_id),
+                        latency_ms=_prop_latency_ms,
+                    )
+
                     now_ts = datetime.utcnow().timestamp()
                     await redis_client.setex(last_update_key, 3, str(now_ts))
                     

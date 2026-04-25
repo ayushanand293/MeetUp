@@ -108,6 +108,49 @@ def track_manual_end() -> None:
     _metrics.increment_counter("manual_end_count")
 
 
+def track_session_start_latency_ms(session_id: str, latency_ms: float) -> None:
+    """Track session_start_latency_ms: time from request to session committed (ms).
+
+    Metric name: session_start_latency_ms
+    Emitted once per session creation in POST /api/v1/sessions/from-request.
+    """
+    _metrics.increment_counter("session_start_latency_ms_total", int(latency_ms))
+    _metrics.increment_counter("session_start_count")
+    import logging
+    logging.getLogger(__name__).info(
+        "metric session_start_latency_ms session_id=%s value=%.2f", session_id, latency_ms
+    )
+
+
+def track_location_propagation_latency_ms(session_id: str, user_id: str, latency_ms: float) -> None:
+    """Track location_propagation_latency_ms: time from location payload timestamp to broadcast (ms).
+
+    Metric name: location_propagation_latency_ms
+    Emitted on each valid location update in the WebSocket handler.
+    """
+    _metrics.increment_counter("location_propagation_latency_ms_total", int(latency_ms))
+    _metrics.increment_counter("location_updates_counted")
+    import logging
+    logging.getLogger(__name__).debug(
+        "metric location_propagation_latency_ms session_id=%s user_id=%s value=%.2f",
+        session_id, user_id, latency_ms,
+    )
+
+
+def track_reconnect_count_per_session(session_id: str, user_id: str) -> None:
+    """Track reconnect_count_per_session: incremented when a user reconnects to an existing session.
+
+    Metric name: reconnect_count_per_session
+    Emitted in ConnectionManager.connect() when the user was already present in the session.
+    """
+    _metrics.increment_counter("reconnect_count_per_session")
+    _metrics.increment_counter(f"session:{session_id}:reconnects")
+    import logging
+    logging.getLogger(__name__).info(
+        "metric reconnect_count_per_session session_id=%s user_id=%s", session_id, user_id
+    )
+
+
 def track_message_received(event_type: str) -> None:
     """Track message received."""
     _metrics.increment_counter("messages_received")

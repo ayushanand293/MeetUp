@@ -10,7 +10,7 @@ from uuid import UUID
 import redis.asyncio as redis
 from fastapi import WebSocket
 
-from app.core.metrics import track_message_broadcasted, track_ws_connection_close, track_ws_connection_open
+from app.core.metrics import track_message_broadcasted, track_reconnect_count_per_session, track_ws_connection_close, track_ws_connection_open
 from app.core.redis import get_redis
 
 from .schemas import PresenceEvent, PresencePayload, PresenceStatus
@@ -46,6 +46,13 @@ class ConnectionManager:
     async def connect(self, session_id: UUID, user_id: UUID, websocket: WebSocket):
         """Accept WebSocket connection and subscribe to session channel."""
         await websocket.accept()
+
+        # Detect reconnect: user already had a connection to this session
+        existing_users_in_session = {
+            self.ws_to_user[ws] for ws in self.active_connections.get(session_id, set())
+        }
+        if user_id in existing_users_in_session:
+            track_reconnect_count_per_session(str(session_id), str(user_id))
 
         # Register local connection
         self.active_connections[session_id].add(websocket)
@@ -130,6 +137,27 @@ class ConnectionManager:
 
     async def _unsubscribe_from_session(self, session_id: UUID):
         """Unsubscribe from session's Redis channel when no local connections remain."""
+        # Cancel listener task first to avoid closing pubsub while async iterator is active.
+        if session_id in self._listener_tasks:
+            task = self._listener_tasks[session_id]
+            task.cancel()
+            try:
+                current_loop = asyncio.get_running_loop()
+                if task.get_loop() is current_loop:
+                    await asyncio.wait_for(task, timeout=1.0)
+                else:
+                    logger.warning(
+                        "Skipping await of listener task for session %s because it belongs to a different event loop",
+                        session_id,
+                    )
+            except asyncio.CancelledError:
+                pass
+            except asyncio.TimeoutError:
+                logger.warning(f"Timed out waiting for Redis listener task shutdown for session {session_id}")
+            except Exception as e:
+                logger.warning(f"Listener task shutdown raised for session {session_id}: {e}")
+            del self._listener_tasks[session_id]
+
         if session_id in self.pubsub_subscriptions:
             pubsub = self.pubsub_subscriptions[session_id]
             channel = f"session:{session_id}"
@@ -143,12 +171,6 @@ class ConnectionManager:
             del self.pubsub_subscriptions[session_id]
 
             logger.info(f"Unsubscribed from Redis channel: {channel}")
-
-        # Cancel listener task if running
-        if session_id in self._listener_tasks:
-            task = self._listener_tasks[session_id]
-            task.cancel()
-            del self._listener_tasks[session_id]
 
     async def _listen_redis_messages(self, session_id: UUID, pubsub: redis.client.PubSub):
         """Listen for messages from Redis and forward to local WebSockets."""

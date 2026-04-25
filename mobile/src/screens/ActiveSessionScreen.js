@@ -170,6 +170,10 @@ const ActiveSessionScreen = ({ route, navigation }) => {
   const arrivalTimerRef = useRef(null);
   const sessionLaunchStartedAtRef = useRef(Date.now());
   const [isSharingPaused, setIsSharingPaused] = useState(false);
+  const awaitingFirstUpdateAfterResumeRef = useRef(false);
+  const lastPropagationMetricAtRef = useRef(0);
+  const reconnectMetricEmittedRef = useRef(false);
+  const sessionIdRef = useRef(null);
 
   const _subscribeToLocationEvents = useCallback(() => {
     const unsubscribes = {};
@@ -233,9 +237,16 @@ const ActiveSessionScreen = ({ route, navigation }) => {
       setAppState(nextState);
 
       if (nextState === 'active') {
-        setSharingPausedText('');
-        if (locationService.isPaused && !isSharingPaused) {
-          locationService.resumeTracking('app_foregrounded');
+        // Fix for race condition: locationService's internal AppState listener might have already
+        // called resumeTracking, making isPaused false. If we were paused for background/blur,
+        // we still want to show the resuming banner until the first successful ws payload is sent.
+        if (!isSharingPaused) {
+          awaitingFirstUpdateAfterResumeRef.current = true;
+          setSharingPausedText('Sharing paused (resuming...)');
+          
+          if (locationService.isPaused) {
+            locationService.resumeTracking('app_foregrounded');
+          }
         }
         return;
       }
@@ -381,9 +392,11 @@ const ActiveSessionScreen = ({ route, navigation }) => {
         );
 
         setSessionId(activeSessionId);
+        sessionIdRef.current = activeSessionId;
         DEBUG && console.log('[ActiveSessionScreen] WebSocket connected');
         analyticsService.track('session_launch_success', {
           elapsed_ms: Date.now() - sessionLaunchStartedAtRef.current,
+          session_start_latency_ms: Date.now() - sessionLaunchStartedAtRef.current,
           source: inviteToken ? 'invite' : routeSessionId ? 'route' : 'lookup',
           has_permission: true,
         });
@@ -449,6 +462,24 @@ const ActiveSessionScreen = ({ route, navigation }) => {
         peerOfflineTimerRef.current = null;
       }
 
+      // Priority 3: End-to-end latency metric
+      if (payload.client_ts_ms) {
+        const nowMs = Date.now();
+        const e2eLatencyMs = Math.max(0, nowMs - payload.client_ts_ms);
+        
+        // Use a 10-second throttle per session to avoid spamming analytics
+        if (nowMs - lastPropagationMetricAtRef.current >= 10000) {
+          DEBUG && console.log(`[ActiveSessionScreen] location_end_to_end_latency_ms=${e2eLatencyMs}`);
+          lastPropagationMetricAtRef.current = nowMs;
+          
+          analyticsService.track('location_end_to_end_latency_ms', {
+            session_id: sessionIdRef.current,
+            latency_ms: e2eLatencyMs,
+            sample_type: 'peer_update',
+          });
+        }
+      }
+
       setPeerLocation({
         user_id: payload.user_id,
         lat: payload.lat,
@@ -485,12 +516,10 @@ const ActiveSessionScreen = ({ route, navigation }) => {
         peerOfflineTimerRef.current = setTimeout(() => {
           if (!isMountedRef.current || peerOfflineAlertedRef.current) return;
 
+          // Only alert after a long time (60s) to allow short background transitions
           peerOfflineAlertedRef.current = true;
-          setPeerLocation(null);
-          setPeerLastSeenText('Offline');
-          setPeerIsStale(true);
           Alert.alert('Connection Paused', 'The other person may have temporarily lost connection. You can stay here and wait for them to reconnect.');
-        }, 8000);
+        }, 60000); // 60s
         return;
       }
     });
@@ -553,7 +582,9 @@ const ActiveSessionScreen = ({ route, navigation }) => {
 
     unsubscribes.onTrackingResumed = locationService.on('trackingResumed', () => {
       if (!isMountedRef.current) return;
-      setSharingPausedText('');
+      if (!awaitingFirstUpdateAfterResumeRef.current) {
+        setSharingPausedText('');
+      }
     });
 
     wsEventUnsubscribesRef.current = unsubscribes;
@@ -591,6 +622,11 @@ const ActiveSessionScreen = ({ route, navigation }) => {
           myLocation.accuracy_m
         );
         DEBUG && sent && console.log('[ActiveSessionScreen] Location update sent');
+        
+        if (sent && awaitingFirstUpdateAfterResumeRef.current) {
+          awaitingFirstUpdateAfterResumeRef.current = false;
+          setSharingPausedText('');
+        }
       }
     }, 3000); // Every 3 seconds
 

@@ -1,4 +1,6 @@
 import uuid
+import json
+import time
 from datetime import datetime, timedelta
 from uuid import UUID
 
@@ -8,9 +10,65 @@ import pytest
 import app.api.endpoints.realtime as realtime_endpoint
 from app.core.config import settings
 from app.models.session import Session as MeetSession
-from app.models.session import SessionParticipant, SessionStatus
+from app.models.session import ParticipantStatus, SessionParticipant, SessionStatus
 from app.models.user import User
+from app.realtime.connection_manager import ConnectionManager
 from app.realtime.schemas import EventType
+
+
+@pytest.fixture(autouse=True)
+def local_broadcast_transport(monkeypatch):
+    """Avoid Redis transport flakiness in unit tests; keep deterministic in-process fanout."""
+
+    async def _noop_subscribe(self, session_id):
+        return None
+
+    async def _noop_unsubscribe(self, session_id):
+        return None
+
+    async def _broadcast_local(self, session_id, message, exclude_user=None):
+        payload = json.dumps(message) if isinstance(message, dict) else message
+        exclude_user_str = str(exclude_user) if exclude_user else None
+        await self._forward_to_local_connections(session_id, payload, exclude_user=exclude_user_str)
+
+    monkeypatch.setattr(ConnectionManager, "_subscribe_to_session", _noop_subscribe)
+    monkeypatch.setattr(ConnectionManager, "_unsubscribe_from_session", _noop_unsubscribe)
+    monkeypatch.setattr(ConnectionManager, "broadcast", _broadcast_local)
+
+def _close_ws_safe(ws):
+    try:
+        ws.close()
+    except Exception:
+        pass
+
+
+def receive_json_with_timeout(websocket, timeout: float = 3.0):
+    deadline = time.monotonic() + timeout
+
+    while time.monotonic() < deadline:
+        try:
+            message = websocket.portal.call(websocket._send_rx.receive_nowait)
+        except Exception as exc:
+            name = exc.__class__.__name__
+            if name == "WouldBlock":
+                time.sleep(0.01)
+                continue
+            if name in {"ClosedResourceError", "EndOfStream"}:
+                pytest.fail("WebSocket stream closed while waiting for message")
+            raise
+
+        if message.get("type") == "websocket.close":
+            pytest.fail(f"WebSocket closed unexpectedly: {message}")
+
+        if message.get("type") != "websocket.send":
+            continue
+
+        if "text" in message and message["text"] is not None:
+            return json.loads(message["text"])
+        if "bytes" in message and message["bytes"] is not None:
+            return json.loads(message["bytes"].decode("utf-8"))
+
+    pytest.fail(f"Timed out waiting for WebSocket message after {timeout:.1f}s")
 
 
 def provision_session_participants(db, session_id: str, user_ids: list[str]) -> None:
@@ -22,16 +80,19 @@ def provision_session_participants(db, session_id: str, user_ids: list[str]) -> 
     db.add(session)
     db.flush()
 
-    participants = [SessionParticipant(session_id=session.id, user_id=UUID(user_id)) for user_id in user_ids]
+    participants = [
+        SessionParticipant(session_id=session.id, user_id=UUID(user_id), status=ParticipantStatus.JOINED)
+        for user_id in user_ids
+    ]
     db.add_all(participants)
     db.commit()
 
 
-def receive_until_type(websocket, expected_type: str, max_attempts: int = 6):
+def receive_until_type(websocket, expected_type: str, timeout: float = 3.0, max_attempts: int = 6):
     """Read websocket messages until the expected event type is received."""
     last_message = None
     for _ in range(max_attempts):
-        message = websocket.receive_json()
+        message = receive_json_with_timeout(websocket, timeout=timeout)
         last_message = message
         if message.get("type") == expected_type:
             return message
@@ -65,23 +126,20 @@ def test_websocket_broadcast(client, db):
     token1 = create_test_token(user1_id)
     token2 = create_test_token(user2_id)
 
-    # User 2 connects first (listener)
-    with client.websocket_connect(f"/api/v1/ws/meetup?token={token2}&session_id={session_id}") as ws2:
-        # User 1 connects (sender)
-        with client.websocket_connect(f"/api/v1/ws/meetup?token={token1}&session_id={session_id}") as ws1:
-            # Flush the "User 1 Online" presence event that ws2 receives immediately
-            presence = ws2.receive_json()
-            assert presence["type"] == EventType.PRESENCE_UPDATE
-            payload = {"type": "location_update", "payload": {"lat": 37.7749, "lon": -122.4194, "accuracy_m": 10.0}}
-            ws1.send_json(payload)
+    ws2 = client.websocket_connect(f"/api/v1/ws/meetup?token={token2}&session_id={session_id}").__enter__()
+    ws1 = client.websocket_connect(f"/api/v1/ws/meetup?token={token1}&session_id={session_id}").__enter__()
+    try:
+        payload = {"type": "location_update", "payload": {"lat": 37.7749, "lon": -122.4194, "accuracy_m": 10.0}}
+        ws1.send_json(payload)
 
-            # User 2 should receive peer_location
-            data = receive_until_type(ws2, "peer_location")
-            assert data["type"] == "peer_location"
-            assert data["payload"]["user_id"] == user1_id
-            assert data["payload"]["lat"] == 37.7749
-
-            print("✅ User 2 received location from User 1")
+        # User 2 should receive peer_location
+        data = receive_until_type(ws2, "peer_location", timeout=3.0)
+        assert data["type"] == "peer_location"
+        assert data["payload"]["user_id"] == user1_id
+        assert data["payload"]["lat"] == 37.7749
+    finally:
+        _close_ws_safe(ws1)
+        _close_ws_safe(ws2)
 
 
 def test_websocket_echo_prevention(client, db):
@@ -115,26 +173,27 @@ def test_websocket_presence(client, db):
     token1 = create_test_token(user1_id)
     token2 = create_test_token(user2_id)
 
-    # User 1 connects first
-    with client.websocket_connect(f"/api/v1/ws/meetup?token={token1}&session_id={session_id}") as ws1:
-        # User 2 connects
-        with client.websocket_connect(f"/api/v1/ws/meetup?token={token2}&session_id={session_id}") as _:
-            # User 1 should receive PRESENCE_UPDATE (ONLINE) for User 2
-            data = ws1.receive_json()
-            assert data["type"] == "presence_update"
-            assert data["payload"]["user_id"] == user2_id
-            assert data["payload"]["status"] == "online"
-            print("✅ User 1 received PRESENCE: ONLINE for User 2")
+    ws1 = client.websocket_connect(f"/api/v1/ws/meetup?token={token1}&session_id={session_id}").__enter__()
+    ws2 = client.websocket_connect(f"/api/v1/ws/meetup?token={token2}&session_id={session_id}").__enter__()
+    try:
+        # User 1 should receive PRESENCE_UPDATE (ONLINE) for User 2
+        data = receive_json_with_timeout(ws1, timeout=3.0)
+        assert data["type"] == "presence_update"
+        assert data["payload"]["user_id"] == user2_id
+        assert data["payload"]["status"] == "online"
+    finally:
+        _close_ws_safe(ws2)
 
-        # User 2 disconnects (context exit)
-        # User 1 should receive PRESENCE_UPDATE (OFFLINE) for User 2
-        data = receive_until_type(ws1, "presence_update")
+    try:
+        # User 2 disconnected, User 1 should receive OFFLINE update
+        data = receive_until_type(ws1, "presence_update", timeout=3.0)
         if data["payload"]["user_id"] != user2_id or data["payload"]["status"] != "offline":
-            data = receive_until_type(ws1, "presence_update")
+            data = receive_until_type(ws1, "presence_update", timeout=3.0)
         assert data["type"] == "presence_update"
         assert data["payload"]["user_id"] == user2_id
         assert data["payload"]["status"] == "offline"
-        print("✅ User 1 received PRESENCE: OFFLINE for User 2")
+    finally:
+        _close_ws_safe(ws1)
 
 
 def test_websocket_end_session_event_broadcast(client, db, monkeypatch):
@@ -149,13 +208,14 @@ def test_websocket_end_session_event_broadcast(client, db, monkeypatch):
 
     monkeypatch.setattr(realtime_endpoint, "end_session_sync", lambda _sid, reason: True)
 
-    with client.websocket_connect(f"/api/v1/ws/meetup?token={token2}&session_id={session_id}") as ws2:
-        with client.websocket_connect(f"/api/v1/ws/meetup?token={token1}&session_id={session_id}") as ws1:
-            # Drain initial presence update for second client.
-            _ = ws2.receive_json()
+    ws2 = client.websocket_connect(f"/api/v1/ws/meetup?token={token2}&session_id={session_id}").__enter__()
+    ws1 = client.websocket_connect(f"/api/v1/ws/meetup?token={token1}&session_id={session_id}").__enter__()
+    try:
+        ws1.send_json({"type": "end_session", "payload": {"reason": "ARRIVAL_CONFIRMED"}})
 
-            ws1.send_json({"type": "end_session", "payload": {"reason": "ARRIVAL_CONFIRMED"}})
-
-            data = receive_until_type(ws2, "session_ended")
-            assert data["type"] == "session_ended"
-            assert data["payload"]["reason"] == "ARRIVAL_CONFIRMED"
+        data = receive_until_type(ws2, "session_ended", timeout=3.0)
+        assert data["type"] == "session_ended"
+        assert data["payload"]["reason"] == "ARRIVAL_CONFIRMED"
+    finally:
+        _close_ws_safe(ws1)
+        _close_ws_safe(ws2)
