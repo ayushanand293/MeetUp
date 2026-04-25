@@ -35,8 +35,52 @@ If this fails, manually set the URI:
 EXPO_PUBLIC_API_BASE_URL=http://192.168.1.50:8000/api/v1 npx expo start
 ```
 
-### Production Build
-**MUST** include the production API URL.
 ```bash
 EXPO_PUBLIC_API_BASE_URL=https://api.meetup.example.com/api/v1 eas build --profile production
 ```
+
+## Production Security Hardening
+
+To ensure production readiness, the backend supports strict CORS and environment-based behavior.
+
+### `ENVIRONMENT`
+- **Options:** `development`, `production`
+- **Behavior:** 
+  - If `development`, CORS defaults to `*` if `CORS_ORIGINS` is empty.
+  - If `production`, CORS defaults to a strict set of local origins (localhost) unless `CORS_ORIGINS` is explicitly provided.
+
+### `CORS_ORIGINS`
+- **Format:** JSON list of strings (e.g. `["https://app.meetup.com"]`)
+- **Required:** Highly recommended in production.
+- **Enforcement:** The backend will reject any request from an origin not in this list.
+
+### `ANALYTICS_ENABLED`
+- **Default:** `true`
+- **Note:** Can be disabled to stop all database ingestion of client events.
+
+### `METRICS_BACKEND`
+- **Options:** `redis`, `memory`
+- **Default:** `redis`
+- **Description:** 
+  - `redis`: Metrics are shared across all processes (Uvicorn, Pytest, Workers) via a shared Redis instance. This is required for unified monitoring in production and dev clusters.
+  - `memory`: Metrics are local to the current process. Counters incremented in tests will not be visible to the web server.
+  - **Failover:** In development, if Redis is unreachable but `METRICS_BACKEND=redis`, the system falls back to `memory` automatically.
+
+## Observability & Metrics
+
+### Viewing Metrics
+- **JSON:** `GET /api/v1/metrics`
+- **Prometheus:** `GET /api/v1/metrics?format=prometheus`
+
+### Verification (Cross-Process)
+To verify that metrics are working across processes:
+1. Start the server: `docker compose up -d`
+2. Run a test that increments metrics:
+   ```bash
+   docker compose exec -T backend pytest tests/test_metrics_cross_process.py
+   ```
+3. Verify via curl:
+   ```bash
+   curl -s "http://localhost:8000/api/v1/metrics?format=prometheus"
+   ```
+   You should see your test metrics reflected in the output.
