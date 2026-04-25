@@ -5,7 +5,7 @@ from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, HTTPException, status
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.api import deps
@@ -23,6 +23,22 @@ router = APIRouter()
 INVITE_TOKEN_TTL_SECONDS = 15 * 60
 INVITE_CREATE_LIMIT_PER_MINUTE = 5
 INVITE_REDEEM_LIMIT_PER_MINUTE = 20
+
+
+def _display_name(user: User | None) -> str:
+    if not user:
+        return "Friend"
+
+    profile = user.profile_data or {}
+    preferred = profile.get("display_name") or profile.get("name")
+    if preferred:
+        return str(preferred)
+
+    email_prefix = (user.email or "").split("@", 1)[0].strip()
+    if email_prefix:
+        return email_prefix.replace(".", " ").replace("_", " ").title()
+
+    return "Friend"
 
 
 def _is_participant(db: Session, session_id: UUID, user_id: UUID) -> bool:
@@ -126,15 +142,34 @@ def get_active_session(db: Session = Depends(get_db), current_user: User = Depen
         .filter(
             SessionParticipant.user_id == current_user.id,
             MeetSession.status == SessionStatus.ACTIVE,
-            SessionParticipant.status == ParticipantStatus.JOINED,
+            or_(
+                SessionParticipant.status == ParticipantStatus.JOINED,
+                SessionParticipant.status.is_(None),
+            ),
         )
+        .order_by(SessionParticipant.joined_at.desc(), MeetSession.created_at.desc())
         .first()
     )
 
     if not participant:
         return None
 
-    return {"session_id": participant.session_id, "joined_at": participant.joined_at}
+    peer_user = (
+        db.query(User)
+        .join(SessionParticipant, SessionParticipant.user_id == User.id)
+        .filter(
+            SessionParticipant.session_id == participant.session_id,
+            SessionParticipant.user_id != current_user.id,
+        )
+        .first()
+    )
+
+    response = {"session_id": participant.session_id, "joined_at": participant.joined_at}
+    if peer_user:
+        response["peer_id"] = str(peer_user.id)
+        response["peer_name"] = _display_name(peer_user)
+
+    return response
 
 
 @router.post("/{session_id}/end")
@@ -356,7 +391,7 @@ def get_session_history(
 
         if co_participant:
             # Extract name from profile_data or use email prefix
-            name = co_participant.profile_data.get("name") if co_participant.profile_data else None
+            name = co_participant.profile_data.get("display_name") if co_participant.profile_data else None
             if not name:
                 name = co_participant.email.split("@")[0].replace("_", " ").title()
             
@@ -427,3 +462,39 @@ async def im_here_confirmation(
             return {"status": "ended", "reason": "MANUAL_CONFIRM"}
 
     return {"status": "waiting_for_peer", "message": "Waiting for peer to confirm"}
+
+
+@router.get("/{session_id}/participants")
+def get_session_participants(
+    session_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user),
+):
+    """
+    Get all participants in a session with their user info (display_name, etc).
+    Only accessible to participants of the session.
+    """
+    session = db.query(MeetSession).filter(MeetSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    if not _is_participant(db, session_id, current_user.id):
+        raise HTTPException(status_code=403, detail="Not a participant of this session")
+    
+    participants = (
+        db.query(SessionParticipant, User)
+        .join(User, SessionParticipant.user_id == User.id)
+        .filter(SessionParticipant.session_id == session_id)
+        .all()
+    )
+    
+    result = []
+    for participant, user in participants:
+        result.append({
+            "user_id": str(user.id),
+            "display_name": _display_name(user),
+            "status": participant.status,
+            "joined_at": participant.joined_at,
+        })
+    
+    return result

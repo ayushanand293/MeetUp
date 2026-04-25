@@ -3,30 +3,6 @@ import { View, Text, TouchableOpacity, ScrollView } from 'react-native';
 import client from '../api/client';
 import { useTheme, Spacing, Radius, Font } from '../theme';
 
-const MOCK_HISTORY = [
-    {
-        session_id: 'mock-session-1',
-        co_participant_id: 'mock-user-sarah',
-        co_participant_name: 'Sarah',
-        co_participant_email: 'sarah@test.com',
-        ended_at: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
-    },
-    {
-        session_id: 'mock-session-2',
-        co_participant_id: 'mock-user-marcus',
-        co_participant_name: 'Marcus',
-        co_participant_email: 'marcus@test.com',
-        ended_at: new Date(Date.now() - 26 * 60 * 60 * 1000).toISOString(),
-    },
-    {
-        session_id: 'mock-session-3',
-        co_participant_id: 'mock-user-jordan',
-        co_participant_name: 'Jordan',
-        co_participant_email: 'jordan@test.com',
-        ended_at: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
-    },
-];
-
 const formatTimeAgo = (endedAt) => {
     if (!endedAt) return 'Recently';
     const date = new Date(endedAt);
@@ -51,9 +27,9 @@ const QuickFriendsScreen = ({ navigation }) => {
             try {
                 const res = await client.get('/sessions/history');
                 const historyItems = res.data?.history || [];
-                setHistory(historyItems.length ? historyItems : MOCK_HISTORY);
+                setHistory(historyItems);
             } catch (_) {
-                setHistory(MOCK_HISTORY);
+                setHistory([]);
             }
         };
         fetchHistory();
@@ -123,6 +99,20 @@ const QuickFriendsScreen = ({ navigation }) => {
             </View>
 
             <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: Spacing.xxl }}>
+                {quickFriends.length === 0 && (
+                    <View style={{
+                        backgroundColor: colors.surface,
+                        borderWidth: 1,
+                        borderColor: colors.border,
+                        borderRadius: Radius.md,
+                        padding: Spacing.md,
+                        marginBottom: Spacing.sm,
+                    }}>
+                        <Text style={[Font.subtitle, { color: colors.textPrimary, marginBottom: 4 }]}>No quick friends yet</Text>
+                        <Text style={[Font.caption, { color: colors.textMuted }]}>Complete a meetup first and they will appear here.</Text>
+                    </View>
+                )}
+
                 {quickFriends.map((friend) => (
                     <View
                         key={friend.co_participant_id || `${friend.co_participant_name}-${friend.session_id}`}

@@ -36,6 +36,11 @@ export const authEventEmitter = new SimpleEventEmitter();
 
 // Helper to get the correct backend URL dynamically
 const getBaseUrl = () => {
+    const configuredBaseUrl = process.env.EXPO_PUBLIC_API_BASE_URL;
+    if (configuredBaseUrl && /^https?:\/\//.test(configuredBaseUrl)) {
+        return configuredBaseUrl.replace(/\/$/, '');
+    }
+
     // 1. If valid host URI (physical device or LAN), use that IP
     // derived from the Expo packager host. Works for both iOS and Android physical devices.
     const debuggerHost = Constants.expoConfig?.hostUri || Constants.manifest?.debuggerHost;

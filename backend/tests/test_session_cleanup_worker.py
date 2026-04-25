@@ -7,10 +7,12 @@ import pytest
 from sqlalchemy import text
 
 from app.core.database import SessionLocal
-from app.core.redis import get_redis
 from app.models.session import ParticipantStatus, Session, SessionParticipant, SessionStatus
 from app.models.user import User
-from app.worker.session_cleanup import expire_stale_sessions
+import app.worker.session_cleanup as session_cleanup
+
+
+_fake_redis_client = None
 
 
 @pytest.fixture(scope="module")
@@ -49,7 +51,7 @@ def db_setup():
 
 
 async def _seed_redis_locations(state):
-    redis_client = await get_redis()
+    redis_client = state["redis_client"]
 
     stale_ts = (datetime.utcnow() - timedelta(minutes=12)).isoformat()
     fresh_ts = datetime.utcnow().isoformat()
@@ -74,37 +76,80 @@ async def _seed_redis_locations(state):
 
 
 async def _get_redis_value(key: str):
-    redis_client = await get_redis()
-    return await redis_client.get(key)
+    return await _fake_redis_client.get(key)
+
+
+class FakeRedis:
+    def __init__(self):
+        self.store = {}
+
+    async def setex(self, key, ttl, value):
+        self.store[key] = value
+
+    async def get(self, key):
+        return self.store.get(key)
+
+    async def scan(self, cursor, match=None):
+        import fnmatch
+
+        keys = [key for key in self.store if match is None or fnmatch.fnmatch(key, match)]
+        return 0, keys
+
+    async def delete(self, *keys):
+        deleted = 0
+        for key in keys:
+            if key in self.store:
+                deleted += 1
+                self.store.pop(key, None)
+        return deleted
+
+    async def incr(self, key):
+        value = int(self.store.get(key, "0")) + 1
+        self.store[key] = str(value)
+        return value
 
 
 def test_expire_stale_sessions_and_cleanup(db_setup):
     state = db_setup
+    fake_redis = FakeRedis()
+    global _fake_redis_client
+    _fake_redis_client = fake_redis
+    state["redis_client"] = fake_redis
 
-    asyncio.run(_seed_redis_locations(state))
+    async def fake_get_redis():
+        return fake_redis
 
-    result = asyncio.run(expire_stale_sessions(stale_after_minutes=5))
-    assert result["sessions_scanned"] >= 2
-    assert result["sessions_expired"] >= 1
+    original_get_redis = session_cleanup.get_redis
+    session_cleanup.get_redis = fake_get_redis
 
-    db = SessionLocal()
     try:
-        stale_session = db.query(Session).filter(Session.id == state["stale_session_id"]).first()
-        fresh_session = db.query(Session).filter(Session.id == state["fresh_session_id"]).first()
+        asyncio.run(_seed_redis_locations(state))
 
-        assert stale_session is not None
-        assert stale_session.status == SessionStatus.ENDED
-        assert stale_session.end_reason == "EXPIRED"
+        result = asyncio.run(session_cleanup.expire_stale_sessions(stale_after_minutes=5))
+        assert result["sessions_scanned"] >= 2
+        assert result["sessions_expired"] >= 1
 
-        assert fresh_session is not None
-        assert fresh_session.status == SessionStatus.ACTIVE
+        db = SessionLocal()
+        try:
+            stale_session = db.query(Session).filter(Session.id == state["stale_session_id"]).first()
+            fresh_session = db.query(Session).filter(Session.id == state["fresh_session_id"]).first()
+
+            assert stale_session is not None
+            assert stale_session.status == SessionStatus.ENDED
+            assert stale_session.end_reason == "EXPIRED"
+
+            assert fresh_session is not None
+            assert fresh_session.status == SessionStatus.ACTIVE
+        finally:
+            db.close()
+
+        stale_loc_key = f"loc:{state['stale_session_id']}:{state['user1_id']}"
+        stale_prox_key = f"prox:{state['stale_session_id']}:a:b"
+        fresh_loc_key = f"loc:{state['fresh_session_id']}:{state['user1_id']}"
+
+        assert asyncio.run(_get_redis_value(stale_loc_key)) is None
+        assert asyncio.run(_get_redis_value(stale_prox_key)) is None
+        assert asyncio.run(_get_redis_value(fresh_loc_key)) is not None
     finally:
-        db.close()
-
-    stale_loc_key = f"loc:{state['stale_session_id']}:{state['user1_id']}"
-    stale_prox_key = f"prox:{state['stale_session_id']}:a:b"
-    fresh_loc_key = f"loc:{state['fresh_session_id']}:{state['user1_id']}"
-
-    assert asyncio.run(_get_redis_value(stale_loc_key)) is None
-    assert asyncio.run(_get_redis_value(stale_prox_key)) is None
-    assert asyncio.run(_get_redis_value(fresh_loc_key)) is not None
+        session_cleanup.get_redis = original_get_redis
+        _fake_redis_client = None

@@ -13,6 +13,7 @@
 
 import * as Location from 'expo-location';
 import { AppState } from 'react-native';
+import { CLIENT_LOCATION_FOREGROUND_ONLY } from '../config';
 
 const DEBUG = process.env.NODE_ENV !== 'production';
 
@@ -91,10 +92,10 @@ class LocationService extends EventEmitter {
     const jitterLon = hasMock ? (Math.random() - 0.5) * 0.006 : 0;
 
     this.config = {
-      accuracy: Location.Accuracy.Highest,
-      timeInterval: 2000,
-      distanceInterval: 5,
-      enableBackground: false,
+      accuracy: Location.Accuracy.BestForNavigation,
+      timeInterval: 1000,
+      distanceInterval: 1,
+      enableBackground: !CLIENT_LOCATION_FOREGROUND_ONLY ? true : false,
       useMockLocation: hasMock,
       mockLat: hasMock ? mockLat + jitterLat : null,
       mockLon: hasMock ? mockLon + jitterLon : null,
@@ -329,7 +330,12 @@ class LocationService extends EventEmitter {
       DEBUG && console.log('[LocationService] Tracking started');
       return true;
     } catch (error) {
-      console.error('[LocationService] Start tracking error:', error);
+      const isRecoverableStartupIssue = /permission|disabled|location services/i.test(String(error?.message || ''));
+      if (isRecoverableStartupIssue) {
+        DEBUG && console.warn('[LocationService] Start tracking blocked:', error?.message || error);
+      } else {
+        console.error('[LocationService] Start tracking error:', error);
+      }
       this.metrics.totalErrors++;
       this.emit('trackingError', { error });
       return false;

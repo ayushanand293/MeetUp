@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.api import deps
@@ -47,18 +48,22 @@ def search_users(
     db: Session = Depends(get_db),
     current_user: User = Depends(deps.get_current_user),
 ):
-    """Search users by display_name (case-insensitive, partial match). Excludes self."""
+    """Search users by display_name/name/email (case-insensitive, partial match). Excludes self."""
     if not name or len(name.strip()) < 2:
         raise HTTPException(status_code=400, detail="Search query must be at least 2 characters")
 
-    query = name.strip().lower()
+    query = name.strip()
 
-    # JSONB text extraction with ilike
+    # JSONB text extraction with ilike; also support legacy `name` and email fallback.
     results = (
         db.query(User)
         .filter(
             User.id != current_user.id,
-            User.profile_data["display_name"].astext.ilike(f"%{query}%"),
+            or_(
+                User.profile_data["display_name"].astext.ilike(f"%{query}%"),
+                User.profile_data["name"].astext.ilike(f"%{query}%"),
+                User.email.ilike(f"%{query}%"),
+            ),
         )
         .limit(20)
         .all()
@@ -67,7 +72,9 @@ def search_users(
     return [
         {
             "id": str(u.id),
-            "display_name": (u.profile_data or {}).get("display_name", ""),
+            "display_name": (u.profile_data or {}).get("display_name")
+            or (u.profile_data or {}).get("name")
+            or u.email.split("@")[0].replace("_", " ").title(),
             "email": u.email,
         }
         for u in results

@@ -1,6 +1,8 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
+
+import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { supabase } from '../api/supabase';
 import * as Linking from 'expo-linking';
+import client from '../api/client';
 import analyticsService from '../services/analyticsService';
 import { authEventEmitter } from '../api/client';
 
@@ -22,21 +24,34 @@ export const AuthProvider = ({ children }) => {
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState(null);
   const [pendingNavigation, setPendingNavigation] = useState(null);
+  const [activeSessionHint, setActiveSessionHint] = useState(null);
   const [sessionInvalidatedElsewhere, setSessionInvalidatedElsewhere] = useState(false);
+  const launchStartedAtRef = useRef(Date.now());
+  const launchTrackedRef = useRef(false);
 
   useEffect(() => {
     // Get initial session
     const getInitialSession = async () => {
+      let initialSession = null;
       try {
         const {
-          data: { session: initialSession },
+          data: { session: fetchedSession },
         } = await supabase.auth.getSession();
+        initialSession = fetchedSession;
         setSession(initialSession);
         setUser(initialSession?.user ?? null);
       } catch (error) {
         console.error('Error getting initial session:', error);
       } finally {
         setLoading(false);
+        if (!launchTrackedRef.current) {
+          launchTrackedRef.current = true;
+          analyticsService.track('app_launch', {
+            elapsed_ms: Date.now() - launchStartedAtRef.current,
+            signed_in: Boolean(initialSession),
+            user_id: initialSession?.user?.id || null,
+          });
+        }
       }
     };
 
@@ -53,6 +68,34 @@ export const AuthProvider = ({ children }) => {
         hasToken: Boolean(queryParams?.token),
         hasAuthTokens: Boolean(queryParams?.access_token && queryParams?.refresh_token),
       });
+
+      if (queryParams?.token) {
+        try {
+          const inviteResponse = await client.get(`/invites/${encodeURIComponent(queryParams.token)}`);
+          const resolvedSessionId = inviteResponse?.data?.session_id;
+          if (resolvedSessionId) {
+            analyticsService.track('deep_link_route_prepared', {
+              type: 'invite',
+              sessionId: resolvedSessionId,
+              hasInviteToken: true,
+            });
+            setPendingNavigation({
+              screen: 'ActiveSession',
+              params: {
+                sessionId: resolvedSessionId,
+                inviteToken: queryParams.token,
+                fromInvite: true,
+              },
+            });
+            return;
+          }
+        } catch (error) {
+          analyticsService.track('deep_link_invite_resolution_failed', {
+            message: error?.response?.data?.detail || error?.message || 'unknown',
+          });
+          console.warn('Invite token resolution failed:', error?.response?.data || error);
+        }
+      }
 
       if (cleanPath.startsWith('request/')) {
         const [, requestId] = cleanPath.split('/');
@@ -293,10 +336,25 @@ export const AuthProvider = ({ children }) => {
     setSessionInvalidatedElsewhere(false);
   };
 
+  const rememberActiveSession = hint => {
+    if (!hint?.session_id) return;
+    setActiveSessionHint(prev => ({
+      ...(prev || {}),
+      ...hint,
+    }));
+  };
+
+  const clearActiveSessionHint = () => {
+    setActiveSessionHint(null);
+  };
+
   const value = {
     session,
     user,
     loading,
+    activeSessionHint,
+    rememberActiveSession,
+    clearActiveSessionHint,
     pendingNavigation,
     consumePendingNavigation,
     sessionInvalidatedElsewhere,

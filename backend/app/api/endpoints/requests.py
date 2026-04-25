@@ -11,7 +11,7 @@ from app.core.database import get_db
 from app.core.idempotency import check_and_cache_idempotency, get_cached_response, get_idempotency_key
 from app.models.meet_request import MeetRequest, RequestStatus
 from app.models.session import Session as MeetSession
-from app.models.session import SessionParticipant, SessionStatus
+from app.models.session import ParticipantStatus, SessionParticipant, SessionStatus
 from app.models.user import User
 
 router = APIRouter()
@@ -46,6 +46,22 @@ def _expire_stale(db: Session):
         db.commit()
 
 
+def _display_name(user: User | None) -> str:
+    if not user:
+        return "Peer"
+
+    profile = user.profile_data or {}
+    preferred = profile.get("display_name") or profile.get("name")
+    if preferred:
+        return str(preferred)
+
+    email_prefix = (user.email or "").split("@", 1)[0].strip()
+    if email_prefix:
+        return email_prefix.replace(".", " ").replace("_", " ").title()
+
+    return "Peer"
+
+
 @router.post("/", status_code=status.HTTP_201_CREATED)
 def create_meet_request(
     body: CreateRequestBody | None = None,
@@ -64,6 +80,23 @@ def create_meet_request(
     receiver = db.query(User).filter(User.id == receiver_id).first()
     if not receiver:
         raise HTTPException(status_code=404, detail="User not found")
+
+    # Hard guard: sender cannot create a new request while already in an active session.
+    sender_active_session = (
+        db.query(SessionParticipant)
+        .join(MeetSession, SessionParticipant.session_id == MeetSession.id)
+        .filter(
+            SessionParticipant.user_id == current_user.id,
+            SessionParticipant.status == ParticipantStatus.JOINED,
+            MeetSession.status == SessionStatus.ACTIVE,
+        )
+        .first()
+    )
+    if sender_active_session:
+        raise HTTPException(
+            status_code=409,
+            detail="You are already in an active session. End it before sending a new request.",
+        )
 
     # Expire stale requests first
     _expire_stale(db)
@@ -130,7 +163,7 @@ def list_pending_requests(
             "created_at": r.created_at,
             "expires_at": r.expires_at,
             "requester_email": r.requester.email,
-            "requester_name": (r.requester.profile_data or {}).get("display_name", r.requester.email),
+            "requester_name": _display_name(r.requester),
         }
         for r in requests
     ]
@@ -141,13 +174,13 @@ def list_outgoing_requests(
     db: Session = Depends(get_db),
     current_user: User = Depends(deps.get_current_user),
 ):
-    """List outgoing meet requests sent by the current user (PENDING or ACCEPTED recently)."""
+    """List outgoing meet requests currently waiting for acceptance."""
     _expire_stale(db)
     requests = (
         db.query(MeetRequest)
         .filter(
             MeetRequest.requester_id == current_user.id,
-            MeetRequest.status.in_([RequestStatus.PENDING, RequestStatus.ACCEPTED]),
+            MeetRequest.status == RequestStatus.PENDING,
         )
         .order_by(MeetRequest.created_at.desc())
         .limit(10)
@@ -161,7 +194,7 @@ def list_outgoing_requests(
             "status": r.status,
             "created_at": r.created_at,
             "expires_at": r.expires_at,
-            "receiver_name": (r.receiver.profile_data or {}).get("display_name", r.receiver.email),
+            "receiver_name": _display_name(r.receiver),
             "receiver_email": r.receiver.email,
         }
         for r in requests
@@ -220,15 +253,23 @@ async def accept_request(
     db.add(session)
     db.flush()
 
-    p1 = SessionParticipant(session_id=session.id, user_id=req.requester_id)
-    p2 = SessionParticipant(session_id=session.id, user_id=req.receiver_id)
+    p1 = SessionParticipant(
+        session_id=session.id,
+        user_id=req.requester_id,
+        status=ParticipantStatus.JOINED,
+    )
+    p2 = SessionParticipant(
+        session_id=session.id,
+        user_id=req.receiver_id,
+        status=ParticipantStatus.JOINED,
+    )
     db.add(p1)
     db.add(p2)
     db.commit()
     db.refresh(session)
 
     requester = db.query(User).filter(User.id == req.requester_id).first()
-    requester_name = (requester.profile_data or {}).get("display_name", requester.email) if requester else "Peer"
+    requester_name = _display_name(requester)
 
     response = {
         "status": "accepted",

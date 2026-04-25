@@ -19,7 +19,9 @@ const RequestsTabsScreen = ({ route, navigation }) => {
     const [loadError, setLoadError] = useState('');
     const [acceptingId, setAcceptingId] = useState(null);
     const pollRef = useRef(null);
-    const autoRoutedSessionRef = useRef(null);
+    const outgoingPendingCountRef = useRef(0);
+    const acceptanceAutoJoinSessionRef = useRef(null);
+    const awaitingSenderJoinRef = useRef(false);
     const ambient = useRef(new Animated.Value(0)).current;
 
     const fetchRequests = useCallback(async (silent = false) => {
@@ -35,6 +37,42 @@ const RequestsTabsScreen = ({ route, navigation }) => {
             if (outgoingRes.status === 'fulfilled') {
                 setOutgoingRequests(outgoingRes.value.data || []);
             }
+
+            const nextOutgoing = outgoingRes.status === 'fulfilled' ? (outgoingRes.value.data || []) : [];
+            const nextOutgoingPendingCount = nextOutgoing.filter((req) => String(req?.status || 'PENDING') === 'PENDING').length;
+
+            // Sender flow signal: pending outgoing disappeared (likely accepted).
+            if (outgoingPendingCountRef.current > 0 && nextOutgoingPendingCount === 0) {
+                awaitingSenderJoinRef.current = true;
+            }
+
+            // Retry until active session appears to avoid race where accept happens just before session visibility.
+            if (awaitingSenderJoinRef.current) {
+                try {
+                    const sessionRes = await client.get('/sessions/active');
+                    const activeSessionId = sessionRes?.data?.session_id;
+                    if (activeSessionId && acceptanceAutoJoinSessionRef.current !== activeSessionId) {
+                        awaitingSenderJoinRef.current = false;
+                        acceptanceAutoJoinSessionRef.current = activeSessionId;
+                        if (pollRef.current) clearInterval(pollRef.current);
+                        navigation.navigate('ActiveSession', {
+                            sessionId: activeSessionId,
+                            friend: sessionRes?.data?.peer_id
+                                ? {
+                                    id: sessionRes.data.peer_id,
+                                    display_name: sessionRes.data.peer_name || 'Friend',
+                                    name: sessionRes.data.peer_name || 'Friend',
+                                }
+                                : undefined,
+                        });
+                        return;
+                    }
+                } catch (_) {
+                    // keep waiting for active session visibility
+                }
+            }
+
+            outgoingPendingCountRef.current = nextOutgoingPendingCount;
 
             if (incomingRes.status === 'rejected' && outgoingRes.status === 'rejected') {
                 setLoadError('Could not refresh requests. Please retry.');
@@ -60,6 +98,10 @@ const RequestsTabsScreen = ({ route, navigation }) => {
         });
     }, [linkedRequestId, incomingRequests]);
 
+    const pendingOutgoingRequests = useMemo(() => {
+        return outgoingRequests.filter((req) => String(req?.status || 'PENDING') === 'PENDING');
+    }, [outgoingRequests]);
+
     const linkedRequestFound = !linkedRequestId
         ? false
         : incomingRequests.some((req) => String(req.id) === String(linkedRequestId));
@@ -69,26 +111,6 @@ const RequestsTabsScreen = ({ route, navigation }) => {
         pollRef.current = setInterval(() => fetchRequests(true), 5000);
         return () => clearInterval(pollRef.current);
     }, [fetchRequests]);
-
-    useEffect(() => {
-        const checkActiveSession = async () => {
-            try {
-                const res = await client.get('/sessions/active');
-                const activeSessionId = res?.data?.session_id;
-                if (activeSessionId && activeSessionId !== autoRoutedSessionRef.current) {
-                    autoRoutedSessionRef.current = activeSessionId;
-                    if (pollRef.current) clearInterval(pollRef.current);
-                    navigation.navigate('ActiveSession', { sessionId: activeSessionId });
-                }
-            } catch (_) {
-                // no active session yet
-            }
-        };
-
-        checkActiveSession();
-        const sessionPoll = setInterval(checkActiveSession, 2000);
-        return () => clearInterval(sessionPoll);
-    }, [navigation]);
 
     useEffect(() => {
         if (route.params?.activeTab) {
@@ -122,6 +144,8 @@ const RequestsTabsScreen = ({ route, navigation }) => {
         try {
             const res = await client.post(`/requests/${req.id}/accept`);
             const { session_id, peer_name, peer_id } = res.data;
+            // Remove accepted request immediately so it is not shown when user navigates back.
+            setIncomingRequests((prev) => prev.filter((r) => r.id !== req.id));
             analyticsService.track('request_accepted', {
                 requestId: req.id,
                 viaLink: String(req.id) === String(linkedRequestId),
@@ -160,8 +184,8 @@ const RequestsTabsScreen = ({ route, navigation }) => {
         );
     }
 
-    const requests = activeTab === 'incoming' ? prioritizedIncomingRequests : outgoingRequests;
-    const totalCount = activeTab === 'incoming' ? incomingRequests.length : outgoingRequests.length;
+    const requests = activeTab === 'incoming' ? prioritizedIncomingRequests : pendingOutgoingRequests;
+    const totalCount = activeTab === 'incoming' ? incomingRequests.length : pendingOutgoingRequests.length;
 
     return (
         <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }} edges={['top']}>
@@ -237,7 +261,7 @@ const RequestsTabsScreen = ({ route, navigation }) => {
                                 textAlign: 'center',
                             }}
                         >
-                            Waiting ({outgoingRequests.length})
+                            Waiting ({pendingOutgoingRequests.length})
                         </Text>
                     </TouchableOpacity>
                 </View>
