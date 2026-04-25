@@ -9,10 +9,12 @@ from sqlalchemy.orm import Session
 from app.api import deps
 from app.core.database import get_db
 from app.core.idempotency import check_and_cache_idempotency, get_cached_response, get_idempotency_key
+from app.core.rate_limit import enforce_rate_limit
 from app.models.meet_request import MeetRequest, RequestStatus
 from app.models.session import Session as MeetSession
 from app.models.session import ParticipantStatus, SessionParticipant, SessionStatus
 from app.models.user import User
+from app.models.user_block import UserBlock
 
 router = APIRouter()
 
@@ -63,12 +65,13 @@ def _display_name(user: User | None) -> str:
 
 
 @router.post("/", status_code=status.HTTP_201_CREATED)
-def create_meet_request(
+async def create_meet_request(
     body: CreateRequestBody | None = None,
     receiver_id: UUID | None = Query(default=None),
     db: Session = Depends(get_db),
     current_user: User = Depends(deps.get_current_user),
 ):
+    await enforce_rate_limit("request_create", current_user.id, 5, 60)
     receiver_id = (body.to_user_id if body else None) or receiver_id
 
     if receiver_id is None:
@@ -97,6 +100,14 @@ def create_meet_request(
             status_code=409,
             detail="You are already in an active session. End it before sending a new request.",
         )
+
+    # BLOCK CHECK
+    existing_block = db.query(UserBlock).filter(
+        ((UserBlock.blocker_id == current_user.id) & (UserBlock.blocked_id == receiver_id)) |
+        ((UserBlock.blocker_id == receiver_id) & (UserBlock.blocked_id == current_user.id))
+    ).first()
+    if existing_block:
+        raise HTTPException(status_code=403, detail="Communication not allowed.")
 
     # Expire stale requests first
     _expire_stale(db)
@@ -225,6 +236,14 @@ async def accept_request(
 
     if req.receiver_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized")
+
+    # BLOCK CHECK
+    existing_block = db.query(UserBlock).filter(
+        ((UserBlock.blocker_id == current_user.id) & (UserBlock.blocked_id == req.requester_id)) |
+        ((UserBlock.blocker_id == req.requester_id) & (UserBlock.blocked_id == current_user.id))
+    ).first()
+    if existing_block:
+        raise HTTPException(status_code=403, detail="Communication not allowed.")
 
     # Check expiry
     if _is_expired(req):

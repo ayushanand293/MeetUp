@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.api import deps
 from app.core.database import get_db
+from app.core.rate_limit import enforce_rate_limit
 from app.models.invite import Invite
 from app.models.meet_request import MeetRequest
 from app.models.user import User
@@ -46,11 +47,12 @@ class InviteRedeemResponse(BaseModel):
 
 
 @router.post("", response_model=CreateInviteResponse, status_code=status.HTTP_201_CREATED)
-def create_invite(
+async def create_invite(
     body: CreateInviteBody,
     db: Session = Depends(get_db),
     current_user: User = Depends(deps.get_current_user),
 ):
+    await enforce_rate_limit("invite_create", current_user.id, 10, 60)
     if body.request_id:
         request = db.query(MeetRequest).filter(MeetRequest.id == body.request_id).first()
         if not request:

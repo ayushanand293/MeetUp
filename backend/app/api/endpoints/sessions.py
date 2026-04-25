@@ -19,6 +19,7 @@ from app.models.invite import Invite
 from app.models.session import ParticipantStatus, SessionParticipant, SessionStatus
 from app.models.session import Session as MeetSession
 from app.models.user import User
+from app.realtime.connection_manager import manager
 
 router = APIRouter()
 
@@ -316,6 +317,7 @@ async def redeem_invite_token(
 async def get_session_snapshot(
     session_id: UUID,
     db: Session = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user),
 ):
     """
     Get current snapshot of all locations in a session (from Redis).
@@ -326,6 +328,10 @@ async def get_session_snapshot(
     session = db.query(MeetSession).filter(MeetSession.id == session_id).first()
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
+    
+    # SECURITY: Verify participation (Fix V1)
+    if not _is_participant(db, session_id, current_user.id):
+        raise HTTPException(status_code=403, detail="Not authorized to view this session")
 
     redis_client = await get_redis()
 
@@ -504,3 +510,40 @@ def get_session_participants(
         })
     
     return result
+
+
+@router.post("/{session_id}/force_end")
+async def force_end_session(
+    session_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user),
+):
+    """
+    Force end an active session. Participant only.
+    """
+    session = db.query(MeetSession).filter(MeetSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+        
+    if not _is_participant(db, session_id, current_user.id):
+        raise HTTPException(status_code=403, detail="Not a participant")
+
+    if session.status == SessionStatus.ENDED:
+        return {"message": "Session already ended", "status": session.status}
+
+    session.status = SessionStatus.ENDED
+    session.ended_at = datetime.utcnow()
+    session.end_reason = "FORCE_ENDED"
+    db.commit()
+
+    # Broadcast session ended
+    from app.realtime.schemas import SessionEndedEvent, SessionEndedPayload
+    event = SessionEndedEvent(
+        payload=SessionEndedPayload(
+            reason="FORCE_ENDED",
+            ended_at=datetime.utcnow()
+        )
+    )
+    await manager.broadcast(session_id, event.model_dump_json())
+    
+    return {"message": "Session force ended", "status": session.status}

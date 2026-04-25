@@ -10,7 +10,11 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.models.user import User
 
+import logging
+from app.core.scrub import scrub_sensitive
+
 security = HTTPBearer()
+logger = logging.getLogger(__name__)
 
 # Cache the JWKS public keys so we don't fetch them on every request
 _jwks_cache = {"keys": None}
@@ -20,7 +24,7 @@ def _get_jwks_keys():
     """Fetch and cache JWKS public keys from Supabase."""
     if _jwks_cache["keys"] is None:
         jwks_url = f"{settings.SUPABASE_URL}/auth/v1/.well-known/jwks.json"
-        print(f"[AUTH] Fetching JWKS from {jwks_url}")
+        logger.info(scrub_sensitive(f"[AUTH] Fetching JWKS from {jwks_url}"))
         try:
             resp = http_requests.get(jwks_url, timeout=10)
             resp.raise_for_status()
@@ -30,9 +34,9 @@ def _get_jwks_keys():
                 for k in jwks_data.get("keys", [])
                 if k.get("kty") == "EC"
             }
-            print(f"[AUTH] Loaded {len(_jwks_cache['keys'])} JWKS key(s)")
+            logger.info(scrub_sensitive(f"[AUTH] Loaded {len(_jwks_cache['keys'])} JWKS key(s)"))
         except Exception as e:
-            print(f"[AUTH] JWKS fetch failed: {e}, falling back to SUPABASE_KEY for HS256")
+            logger.warning(scrub_sensitive(f"[AUTH] JWKS fetch failed: {e}, falling back to SUPABASE_KEY for HS256"))
             _jwks_cache["keys"] = {}
     return _jwks_cache["keys"]
 
@@ -76,8 +80,8 @@ def get_current_user(
             raise HTTPException(status_code=403, detail="Token has no user ID (sub)")
 
     except PyJWTError as e:
-        print(f"[AUTH] JWT decode FAILED: {type(e).__name__}: {e}")
-        raise HTTPException(status_code=403, detail=f"Could not validate credentials: {e}") from None
+        logger.warning(scrub_sensitive(f"[AUTH] JWT decode FAILED: {type(e).__name__}: {e}"))
+        raise HTTPException(status_code=403, detail="Could not validate credentials") from None
 
     user = db.query(User).filter(User.id == user_id).first()
     if not user:

@@ -15,7 +15,9 @@ from app.core.metrics import (
     track_rate_limit_hit,
     track_validation_error,
 )
+from app.core.rate_limit import check_rate_limit
 from app.core.redis import get_redis
+from app.core.scrub import scrub_sensitive
 from app.core.validation import validate_location_update
 from app.realtime.connection_manager import manager
 from app.realtime.schemas import (
@@ -83,7 +85,7 @@ async def websocket_endpoint(
 
         user_id = UUID(payload.get("sub"))
     except (PyJWTError, ValueError) as e:
-        logger.warning(f"WebSocket Auth Failed: {e}")
+        logger.warning(scrub_sensitive(f"WebSocket Auth Failed: {e}"))
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
 
@@ -96,7 +98,7 @@ async def websocket_endpoint(
 
     is_participant = await run_in_threadpool(is_session_participant_sync, session_uuid, user_id)
     if not is_participant:
-        logger.warning(f"WebSocket Auth Failed: user {user_id} is not an active participant in session {session_uuid}")
+        logger.warning(scrub_sensitive(f"WebSocket Auth Failed: user {user_id} is not an active participant in session {session_uuid}"))
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
 
@@ -136,7 +138,45 @@ async def websocket_endpoint(
                             await websocket.send_text(error_event.model_dump_json())
                             continue
 
-                    # 6. Parse and validate location update
+                    # 6. Short-window rate limit (e.g. 60 updates per minute)
+                    # This protects against short bursts and keeps Redis traffic sane.
+                    # Fail-closed is handled internally by check_rate_limit.
+                    loc_limit_allowed = await check_rate_limit(
+                        key_prefix="location_updates",
+                        identifier=f"{session_uuid}:{user_id}",
+                        limit=60,
+                        window_seconds=60
+                    )
+                    if not loc_limit_allowed:
+                        track_rate_limit_hit()
+                        error_event = ErrorEvent(
+                            payload=ErrorPayload(
+                                code="RATE_LIMIT_EXCEEDED",
+                                message="Too many updates. Maximum 60 per minute.",
+                            )
+                        )
+                        await websocket.send_text(error_event.model_dump_json())
+                        continue
+
+                    # 6. Session-wide cap (e.g. max 2000 updates per session per user)
+                    total_updates_key = f"total_updates:{session_uuid}:{user_id}"
+                    total_updates = await redis_client.incr(total_updates_key)
+                    if total_updates == 1:
+                        # Set TTL for total updates (expire shortly after session TTL)
+                        await redis_client.expire(total_updates_key, 7200) # 2 hours
+
+                    if total_updates > 2000:
+                        track_rate_limit_hit()
+                        error_event = ErrorEvent(
+                            payload=ErrorPayload(
+                                code="SESSION_CAP_EXCEEDED",
+                                message="Session limit reached. Maximum 2000 updates per session.",
+                            )
+                        )
+                        await websocket.send_text(error_event.model_dump_json())
+                        continue
+
+                    # 7. Parse and validate location update
                     try:
                         location_event = LocationUpdateEvent(**event_data)
                     except Exception as e:
@@ -161,7 +201,7 @@ async def websocket_endpoint(
                         track_validation_error("location_validation")
                         error_event = ErrorEvent(payload=ErrorPayload(code="INVALID_LOCATION", message=error_msg))
                         await websocket.send_text(error_event.model_dump_json())
-                        logger.warning(f"Invalid location from {user_id}: {error_msg}")
+                        logger.warning(scrub_sensitive(f"Invalid location from {user_id}: {error_msg}"))
                         continue
 
                     # 8. Update previous location for next iteration
@@ -251,7 +291,7 @@ async def websocket_endpoint(
 
                 elif event_type == EventType.END_SESSION:
                     # Handle end session (triggers session end via DB and broadcasts)
-                    logger.info(f"User {user_id} sent end_session event")
+                    logger.info(scrub_sensitive(f"User {user_id} sent end_session event"))
                     try:
                         end_event = EndSessionEvent(**event_data)
                         reason = end_event.payload.reason
@@ -276,7 +316,7 @@ async def websocket_endpoint(
                         logger.error(f"Error handling end_session: {e}")
 
             except Exception as e:
-                logger.error(f"WebSocket Error: {e}", exc_info=True)
+                logger.error(scrub_sensitive(f"WebSocket Error: {e}"), exc_info=True)
                 # Send error back to client
                 error_event = ErrorEvent(payload=ErrorPayload(code="INTERNAL_ERROR", message=str(e)))
                 try:
