@@ -35,28 +35,31 @@ class SimpleEventEmitter {
 export const authEventEmitter = new SimpleEventEmitter();
 
 // Helper to get the correct backend URL dynamically
-const getBaseUrl = () => {
+const resolveApiBaseUrl = () => {
     const configuredBaseUrl = process.env.EXPO_PUBLIC_API_BASE_URL;
     if (configuredBaseUrl && /^https?:\/\//.test(configuredBaseUrl)) {
         return configuredBaseUrl.replace(/\/$/, '');
     }
 
-    // 1. If valid host URI (physical device or LAN), use that IP
-    // derived from the Expo packager host. Works for both iOS and Android physical devices.
-    const debuggerHost = Constants.expoConfig?.hostUri || Constants.manifest?.debuggerHost;
-    if (debuggerHost) {
-        const ip = debuggerHost.split(':')[0];
-        return `http://${ip}:8000/api/v1`;
+    if (__DEV__) {
+        console.warn('⚠️ No EXPO_PUBLIC_API_BASE_URL provided. Using __DEV__ localhost fallbacks.');
+        // 1. If valid host URI (physical device or LAN), use that IP
+        const debuggerHost = Constants.expoConfig?.hostUri || Constants.manifest?.debuggerHost;
+        if (debuggerHost) {
+            const ip = debuggerHost.split(':')[0];
+            return `http://${ip}:8000/api/v1`;
+        }
+        // 2. Fallback for Android Emulator standard IP
+        if (Platform.OS === 'android') return 'http://10.0.2.2:8000/api/v1';
+        // 3. Ultimate fallback (iOS Simulator / Local dev)
+        return 'http://localhost:8000/api/v1';
     }
 
-    // 2. Fallback for Android Emulator standard IP
-    if (Platform.OS === 'android') return 'http://10.0.2.2:8000/api/v1';
-
-    // 3. Ultimate fallback (iOS Simulator / Local dev)
-    return 'http://localhost:8000/api/v1';
+    // In production, hard error if missing
+    throw new Error('CRITICAL: EXPO_PUBLIC_API_BASE_URL is not set for production build.');
 };
 
-const BASE_URL = getBaseUrl();
+const BASE_URL = resolveApiBaseUrl();
 
 console.log('API Client initialized with Base URL:', BASE_URL);
 

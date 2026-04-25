@@ -72,17 +72,22 @@ export const AuthProvider = ({ children }) => {
       if (queryParams?.token) {
         try {
           const inviteResponse = await client.get(`/invites/${encodeURIComponent(queryParams.token)}`);
-          const resolvedSessionId = inviteResponse?.data?.session_id;
-          if (resolvedSessionId) {
+          const resolvedRequestId = inviteResponse?.data?.request_id;
+          if (resolvedRequestId) {
+            try {
+              await client.post(`/invites/${encodeURIComponent(queryParams.token)}/redeem`);
+            } catch (_) {
+              // Redeem is idempotent best-effort; routing should still continue.
+            }
             analyticsService.track('deep_link_route_prepared', {
-              type: 'invite',
-              sessionId: resolvedSessionId,
+              type: 'invite_request',
+              requestId: resolvedRequestId,
               hasInviteToken: true,
             });
             setPendingNavigation({
-              screen: 'ActiveSession',
+              screen: 'AcceptRequest',
               params: {
-                sessionId: resolvedSessionId,
+                linkedRequestId: resolvedRequestId,
                 inviteToken: queryParams.token,
                 fromInvite: true,
               },
@@ -90,10 +95,24 @@ export const AuthProvider = ({ children }) => {
             return;
           }
         } catch (error) {
+          const status = error?.response?.status;
+          const isExpiredOrInvalid = status === 410 || status === 404;
           analyticsService.track('deep_link_invite_resolution_failed', {
             message: error?.response?.data?.detail || error?.message || 'unknown',
+            status: status || null,
           });
           console.warn('Invite token resolution failed:', error?.response?.data || error);
+
+          // Show a user-visible error so they can ask the sender to resend.
+          setPendingNavigation({
+            screen: 'InviteError',
+            params: {
+              reason: isExpiredOrInvalid ? 'expired' : 'invalid',
+              message: isExpiredOrInvalid
+                ? 'This invite link has expired. Ask the sender to share a new one.'
+                : 'This invite link is invalid or has already been used.',
+            },
+          });
         }
       }
 

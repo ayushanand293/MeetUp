@@ -8,6 +8,9 @@ class Settings(BaseSettings):
     SUPABASE_KEY: str = ""
     ANALYTICS_ENABLED: bool = True
     PROJECT_NAME: str = "MeetUp API"
+    ENVIRONMENT: str = "development"
+    CORS_ORIGINS: list[str] = []
+    METRICS_BACKEND: str = "redis"
 
     model_config = SettingsConfigDict(env_file=".env", env_ignore_empty=True, extra="ignore")
 

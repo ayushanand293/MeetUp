@@ -1,54 +1,123 @@
-import json
-from datetime import datetime
+import secrets
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.api.endpoints.sessions import INVITE_TOKEN_TTL_SECONDS
+from app.api import deps
 from app.core.database import get_db
-from app.core.redis import get_redis
-from app.models.session import Session as MeetSession, SessionStatus
+from app.core.rate_limit import enforce_rate_limit
+from app.models.invite import Invite
+from app.models.meet_request import MeetRequest
+from app.models.user import User
 
 router = APIRouter()
+INVITE_TTL_HOURS = 24
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+class CreateInviteBody(BaseModel):
+    recipient: str = Field(min_length=1, max_length=255)
+    request_id: UUID | None = None
+
+
+class CreateInviteResponse(BaseModel):
+    invite_id: str
+    token: str
+    url: str
+    expires_at: datetime
 
 
 class InviteResolutionResponse(BaseModel):
-    invite_token: str
-    session_id: str
-    session_status: str
-    created_by: str | None = None
-    created_at: str | None = None
-    expires_in_seconds: int
+    invite_id: str
+    request_id: str | None
+    expires_at: datetime
+    redeemed_at: datetime | None
+
+
+class InviteRedeemResponse(BaseModel):
+    invite_id: str
+    request_id: str | None
+    redeemed_at: datetime
+
+
+@router.post("", response_model=CreateInviteResponse, status_code=status.HTTP_201_CREATED)
+async def create_invite(
+    body: CreateInviteBody,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user),
+):
+    await enforce_rate_limit("invite_create", current_user.id, 10, 60)
+    if body.request_id:
+        request = db.query(MeetRequest).filter(MeetRequest.id == body.request_id).first()
+        if not request:
+            raise HTTPException(status_code=404, detail="Request not found")
+
+    token = secrets.token_urlsafe(24)
+    expires_at = _utc_now() + timedelta(hours=INVITE_TTL_HOURS)
+    invite = Invite(
+        created_by=current_user.id,
+        recipient=body.recipient.strip(),
+        request_id=body.request_id,
+        token=token,
+        expires_at=expires_at,
+    )
+    db.add(invite)
+    db.commit()
+    db.refresh(invite)
+
+    return CreateInviteResponse(
+        invite_id=str(invite.id),
+        token=invite.token,
+        url=f"meetup://invite?token={invite.token}",
+        expires_at=invite.expires_at,
+    )
+
+
+def _resolve_valid_invite_or_throw(db: Session, token: str) -> Invite:
+    invite = db.query(Invite).filter(Invite.token == token).first()
+    if not invite:
+        raise HTTPException(status_code=404, detail="Invite not found")
+
+    if invite.expires_at and invite.expires_at < _utc_now():
+        raise HTTPException(status_code=410, detail="Invite has expired")
+
+    return invite
 
 
 @router.get("/{token}", response_model=InviteResolutionResponse)
-async def resolve_invite_token(token: str, db: Session = Depends(get_db)):
-    redis_client = await get_redis()
-    invite_raw = await redis_client.get(f"invite:{token}")
-    if not invite_raw:
-        raise HTTPException(status_code=410, detail="Invite token expired or invalid")
-
-    try:
-        invite_data = json.loads(invite_raw)
-        session_id = UUID(invite_data.get("session_id"))
-    except (TypeError, ValueError, json.JSONDecodeError, AttributeError):
-        raise HTTPException(status_code=400, detail="Invite token payload is malformed")
-
-    session = db.query(MeetSession).filter(MeetSession.id == session_id).first()
-    if not session or session.status != SessionStatus.ACTIVE:
-        raise HTTPException(status_code=410, detail="Invite token expired or invalid")
-
-    ttl = await redis_client.ttl(f"invite:{token}")
-    if ttl is None or ttl < 0:
-        ttl = INVITE_TOKEN_TTL_SECONDS
-
+def resolve_invite_token(token: str, db: Session = Depends(get_db)):
+    invite = _resolve_valid_invite_or_throw(db, token)
     return InviteResolutionResponse(
-        invite_token=token,
-        session_id=str(session.id),
-        session_status=session.status.value if hasattr(session.status, "value") else str(session.status),
-        created_by=invite_data.get("created_by"),
-        created_at=invite_data.get("created_at") or datetime.utcnow().isoformat(),
-        expires_in_seconds=ttl,
+        invite_id=str(invite.id),
+        request_id=str(invite.request_id) if invite.request_id else None,
+        expires_at=invite.expires_at,
+        redeemed_at=invite.redeemed_at,
+    )
+
+
+@router.post("/{token}/redeem", response_model=InviteRedeemResponse)
+def redeem_invite_token(
+    token: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user),
+):
+    _ = current_user  # ensures auth is enforced
+    invite = _resolve_valid_invite_or_throw(db, token)
+
+    if not invite.redeemed_at:
+        invite.redeemed_at = _utc_now()
+        db.add(invite)
+        db.commit()
+        db.refresh(invite)
+
+    return InviteRedeemResponse(
+        invite_id=str(invite.id),
+        request_id=str(invite.request_id) if invite.request_id else None,
+        redeemed_at=invite.redeemed_at,
     )

@@ -27,6 +27,7 @@ class LocationPayload(BaseModel):
     lon: float
     accuracy_m: float = 0.0
     timestamp: datetime = Field(default_factory=datetime.utcnow)
+    client_ts_ms: int | None = None
 
 
 class LocationUpdateEvent(BaseModel):
