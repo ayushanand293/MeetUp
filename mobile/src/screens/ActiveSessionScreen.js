@@ -237,14 +237,11 @@ const ActiveSessionScreen = ({ route, navigation }) => {
       setAppState(nextState);
 
       if (nextState === 'active') {
-        // Fix for race condition: locationService's internal AppState listener might have already
-        // called resumeTracking, making isPaused false. If we were paused for background/blur,
-        // we still want to show the resuming banner until the first successful ws payload is sent.
         if (!isSharingPaused) {
-          awaitingFirstUpdateAfterResumeRef.current = true;
-          setSharingPausedText('Sharing paused (resuming...)');
-          
+          // If we weren't manually paused but were backgrounded, show resuming status
           if (locationService.isPaused) {
+            awaitingFirstUpdateAfterResumeRef.current = true;
+            setSharingPausedText('Sharing paused (resuming...)');
             locationService.resumeTracking('app_foregrounded');
           }
         }
@@ -252,7 +249,11 @@ const ActiveSessionScreen = ({ route, navigation }) => {
       }
 
       if (nextState.match(/inactive|background/)) {
-        setSharingPausedText('Sharing paused (app in background)');
+        // Only set background text if not already manually paused
+        if (!isSharingPaused) {
+          setSharingPausedText('Sharing paused (app in background)');
+        }
+        
         if (locationService.isTracking) {
           locationService.pauseTracking('app_backgrounded');
         }
@@ -575,14 +576,28 @@ const ActiveSessionScreen = ({ route, navigation }) => {
       setWsError(`Error: ${payload.message}`);
     });
 
-    unsubscribes.onTrackingPaused = locationService.on('trackingPaused', () => {
+    unsubscribes.onTrackingPaused = locationService.on('trackingPaused', (data) => {
       if (!isMountedRef.current) return;
-      setSharingPausedText('Sharing paused (app in background)');
+      
+      if (data?.reason === 'manual_pause') {
+        setSharingPausedText('Sharing paused by you');
+      } else if (data?.reason === 'screen_blurred') {
+        setSharingPausedText('Sharing paused (screen not in view)');
+      } else {
+        // Default to background if not other specific reason provided or it's app_backgrounded
+        setSharingPausedText('Sharing paused (app in background)');
+      }
     });
 
-    unsubscribes.onTrackingResumed = locationService.on('trackingResumed', () => {
+    unsubscribes.onTrackingResumed = locationService.on('trackingResumed', (data) => {
       if (!isMountedRef.current) return;
-      if (!awaitingFirstUpdateAfterResumeRef.current) {
+      
+      // If manually resumed, we clear immediately. 
+      // If foregrounded, we wait for first WS update to clear (handled in streaming loop)
+      if (data?.reason === 'manual_resume') {
+        awaitingFirstUpdateAfterResumeRef.current = false;
+        setSharingPausedText('');
+      } else if (!awaitingFirstUpdateAfterResumeRef.current) {
         setSharingPausedText('');
       }
     });

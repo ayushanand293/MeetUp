@@ -30,7 +30,18 @@ jobs:
           docker compose logs backend
           exit 1
 
-      - name: Run Week 4 validation tests
+      - name: Run security and integration tests
+        run: |
+          docker compose exec -T backend pytest -q tests/test_authorization.py
+          docker compose exec -T backend pytest -q tests/test_rate_limits.py
+          docker compose exec -T backend pytest -q tests/test_metrics_store.py tests/test_metrics_cross_process.py
+
+      - name: Run dependency security scan
+        run: |
+          docker compose exec -T backend pip install pip-audit
+          docker compose exec -T backend pip-audit --desc on
+
+      - name: Run legacy compatibility tests
         run: docker compose exec -T backend python test_week4_features.py
 
   web-build:
