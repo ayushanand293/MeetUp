@@ -40,6 +40,8 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - SUPABASE_URL=${SUPABASE_URL} # To be added later
       - SUPABASE_KEY=${SUPABASE_KEY} # To be added later
+      - ENVIRONMENT=${ENVIRONMENT:-production}
+      - OTP_DEV_ECHO_ENABLED=${OTP_DEV_ECHO_ENABLED:-false}
     ports:
       - "8000:8000"
     depends_on:

@@ -1,7 +1,7 @@
 import axios from 'axios';
-import { supabase } from './supabase';
 import Constants from 'expo-constants';
 import { Platform } from 'react-native';
+import { authStorage } from './authStorage';
 
 // Simple custom event emitter for auth events
 class SimpleEventEmitter {
@@ -73,9 +73,9 @@ const client = axios.create({
 // Interceptor to add the Supabase JWT to every request
 client.interceptors.request.use(
     async (config) => {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (session?.access_token) {
-            config.headers.Authorization = `Bearer ${session.access_token}`;
+        const token = await authStorage.getAccessToken();
+        if (token) {
+            config.headers.Authorization = `Bearer ${token}`;
         }
         return config;
     },
@@ -88,12 +88,11 @@ client.interceptors.request.use(
 client.interceptors.response.use(
     (response) => response,
     async (error) => {
-        if (error?.response?.status === 401) {
+        if (error?.response?.status === 401 && !error?.config?.skipSessionInvalidation) {
             // Session has been invalidated (likely logged in elsewhere)
             // Emit event so AuthContext can handle this
             authEventEmitter.emit('SESSION_INVALIDATED');
-            // Sign out from Supabase
-            await supabase.auth.signOut({ scope: 'local' });
+            await authStorage.clearSession();
         }
         return Promise.reject(error);
     }

@@ -3,6 +3,7 @@ import React, { createContext, useContext, useEffect, useRef, useState } from 'r
 import { supabase } from '../api/supabase';
 import * as Linking from 'expo-linking';
 import client from '../api/client';
+import { authStorage } from '../api/authStorage';
 import analyticsService from '../services/analyticsService';
 import { authEventEmitter } from '../api/client';
 
@@ -21,7 +22,8 @@ export const useAuth = () => {
 // Auth Provider component
 export const AuthProvider = ({ children }) => {
   const [session, setSession] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [initializing, setInitializing] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [user, setUser] = useState(null);
   const [pendingNavigation, setPendingNavigation] = useState(null);
   const [activeSessionHint, setActiveSessionHint] = useState(null);
@@ -34,22 +36,40 @@ export const AuthProvider = ({ children }) => {
     const getInitialSession = async () => {
       let initialSession = null;
       try {
-        const {
-          data: { session: fetchedSession },
-        } = await supabase.auth.getSession();
-        initialSession = fetchedSession;
-        setSession(initialSession);
-        setUser(initialSession?.user ?? null);
+        const [accessToken, storedUser] = await Promise.all([
+          authStorage.getAccessToken(),
+          authStorage.getUser(),
+        ]);
+
+        if (accessToken) {
+          initialSession = { access_token: accessToken, user: storedUser };
+          setSession(initialSession);
+          setUser(storedUser ?? null);
+
+          try {
+            const { data: freshUser } = await client.get('/users/me', {
+              skipSessionInvalidation: true,
+            });
+            initialSession = { access_token: accessToken, user: freshUser };
+            await authStorage.setSession(accessToken, freshUser);
+            setSession(initialSession);
+            setUser(freshUser);
+          } catch (error) {
+            await authStorage.clearSession();
+            initialSession = null;
+            setSession(null);
+            setUser(null);
+          }
+        }
       } catch (error) {
         console.error('Error getting initial session:', error);
       } finally {
-        setLoading(false);
+        setInitializing(false);
         if (!launchTrackedRef.current) {
           launchTrackedRef.current = true;
           analyticsService.track('app_launch', {
             elapsed_ms: Date.now() - launchStartedAtRef.current,
             signed_in: Boolean(initialSession),
-            user_id: initialSession?.user?.id || null,
           });
         }
       }
@@ -95,24 +115,10 @@ export const AuthProvider = ({ children }) => {
             return;
           }
         } catch (error) {
-          const status = error?.response?.status;
-          const isExpiredOrInvalid = status === 410 || status === 404;
           analyticsService.track('deep_link_invite_resolution_failed', {
             message: error?.response?.data?.detail || error?.message || 'unknown',
-            status: status || null,
           });
           console.warn('Invite token resolution failed:', error?.response?.data || error);
-
-          // Show a user-visible error so they can ask the sender to resend.
-          setPendingNavigation({
-            screen: 'InviteError',
-            params: {
-              reason: isExpiredOrInvalid ? 'expired' : 'invalid',
-              message: isExpiredOrInvalid
-                ? 'This invite link has expired. Ask the sender to share a new one.'
-                : 'This invite link is invalid or has already been used.',
-            },
-          });
         }
       }
 
@@ -176,19 +182,8 @@ export const AuthProvider = ({ children }) => {
       if (url) handleDeepLink(url);
     });
 
-    // Listen for auth state changes
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange(async (event, currentSession) => {
-      console.log('Auth state changed:', event);
-      setSession(currentSession);
-      setUser(currentSession?.user ?? null);
-      setLoading(false);
-    });
-
     // Cleanup subscription on unmount
     return () => {
-      subscription?.unsubscribe();
       linkingSubscription.remove();
     };
   }, []);
@@ -199,6 +194,7 @@ export const AuthProvider = ({ children }) => {
       setSessionInvalidatedElsewhere(true);
       setSession(null);
       setUser(null);
+      authStorage.clearSession();
     };
 
     authEventEmitter.on('SESSION_INVALIDATED', handleSessionInvalidated);
@@ -208,44 +204,20 @@ export const AuthProvider = ({ children }) => {
     };
   }, []);
 
-  // Sign up with email and password
-  const signUpWithEmail = async (email, password) => {
-    try {
-      setLoading(true);
-      const { data, error } = await supabase.auth.signUp({
-        email,
-        password,
-      });
-      if (error) throw error;
-      return data;
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Sign in with email and password
-  const signInWithEmail = async (email, password) => {
-    try {
-      setLoading(true);
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
-      if (error) throw error;
-      return data;
-    } finally {
-      setLoading(false);
-    }
-  };
-
   // Sign in with Phone (Send OTP)
   const signInWithPhone = async phone => {
     try {
       setLoading(true);
-      const { data, error } = await supabase.auth.signInWithOtp({
-        phone,
+      await authStorage.clearSession();
+      setSession(null);
+      setUser(null);
+      setPendingNavigation(null);
+
+      const { data } = await client.post('/auth/otp/start', {
+        phone_e164: phone,
+      }, {
+        skipSessionInvalidation: true,
       });
-      if (error) throw error;
       return data;
     } finally {
       setLoading(false);
@@ -256,55 +228,41 @@ export const AuthProvider = ({ children }) => {
   const verifyPhoneOTP = async (phone, token) => {
     try {
       setLoading(true);
-      const { data, error } = await supabase.auth.verifyOtp({
-        phone,
-        token,
-        type: 'sms',
+      const deviceId = await authStorage.getDeviceId();
+      const { data } = await client.post('/auth/otp/verify', {
+        phone_e164: phone,
+        otp_code: token,
+        device_id: deviceId,
+      }, {
+        skipSessionInvalidation: true,
       });
-      if (error) throw error;
+
+      const nextSession = {
+        access_token: data.access_token,
+        user: data.user,
+      };
+      await authStorage.setSession(data.access_token, data.user);
+      setSession(nextSession);
+      setUser(data.user);
       return data;
     } finally {
       setLoading(false);
     }
   };
 
-  // Reset Password Request
-  const resetPasswordForEmail = async email => {
-    try {
-      setLoading(true);
-      const { data, error } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: Linking.createURL('/reset-password'),
-      });
-      if (error) throw error;
-      return data;
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Update User Password (after reset)
-  const updateUserPassword = async new_password => {
-    try {
-      setLoading(true);
-      const { data, error } = await supabase.auth.updateUser({
-        password: new_password,
-      });
-      if (error) throw error;
-      return data;
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Update current user account details (email/phone/password/metadata)
+  // Update current user account details.
   const updateAccountDetails = async updates => {
     try {
       setLoading(true);
-      const { data, error } = await supabase.auth.updateUser(updates);
-      if (error) throw error;
-      if (data?.user) {
-        setUser(data.user);
+      const { data } = await client.post('/users/profile', {
+        display_name: updates.display_name,
+      });
+      const accessToken = await authStorage.getAccessToken();
+      if (accessToken) {
+        await authStorage.setSession(accessToken, data);
       }
+      setUser(data);
+      setSession(prev => (prev ? { ...prev, user: data } : prev));
       return data;
     } finally {
       setLoading(false);
@@ -315,26 +273,9 @@ export const AuthProvider = ({ children }) => {
   const signOut = async () => {
     try {
       setLoading(true);
-      const { error } = await supabase.auth.signOut();
-      if (!error) {
-        return { mode: 'remote' };
-      }
-
-      const message = (error?.message || '').toLowerCase();
-      const isNetworkFailure = message.includes('network request failed') || message.includes('failed to fetch');
-
-      if (!isNetworkFailure) {
-        throw error;
-      }
-
-      // If network is unavailable, perform local-only sign-out so users can still leave the session.
-      const { error: localError } = await supabase.auth.signOut({ scope: 'local' });
-      if (localError) {
-        setSession(null);
-        setUser(null);
-        throw localError;
-      }
-
+      await authStorage.clearSession();
+      setSession(null);
+      setUser(null);
       return { mode: 'local' };
     } catch (error) {
       console.error('Error signing out:', error);
@@ -371,6 +312,7 @@ export const AuthProvider = ({ children }) => {
     session,
     user,
     loading,
+    initializing,
     activeSessionHint,
     rememberActiveSession,
     clearActiveSessionHint,
@@ -378,12 +320,8 @@ export const AuthProvider = ({ children }) => {
     consumePendingNavigation,
     sessionInvalidatedElsewhere,
     clearSessionInvalidatedFlag,
-    signUpWithEmail,
-    signInWithEmail,
     signInWithPhone,
     verifyPhoneOTP,
-    resetPasswordForEmail,
-    updateUserPassword,
     updateAccountDetails,
     signOut,
   };

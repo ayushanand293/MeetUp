@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -108,7 +108,7 @@ def test_expired_invite_returns_410(client):
     try:
         invite = db.query(Invite).filter(Invite.token == token).first()
         assert invite is not None
-        invite.expires_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+        invite.expires_at = datetime.utcnow() - timedelta(minutes=1)
         db.add(invite)
         db.commit()
     finally:

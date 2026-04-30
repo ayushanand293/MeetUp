@@ -7,7 +7,6 @@ import { useTheme } from '../theme';
 
 import LoginScreen from '../screens/LoginScreen';
 import RegisterScreen from '../screens/RegisterScreen';
-import ForgotPasswordScreen from '../screens/ForgotPasswordScreen';
 import HomeScreen from '../screens/HomeScreen';
 import FriendListScreen from '../screens/FriendListScreen';
 import QuickFriendsScreen from '../screens/QuickFriendsScreen';
@@ -20,11 +19,10 @@ import SettingsScreen from '../screens/SettingsScreen';
 const Stack = createNativeStackNavigator();
 const navigationRef = createNavigationContainerRef();
 
-const AuthStack = () => (
-  <Stack.Navigator screenOptions={{ headerShown: false }}>
+const AuthStack = ({ initialRouteName = 'Login' }) => (
+  <Stack.Navigator initialRouteName={initialRouteName} screenOptions={{ headerShown: false }}>
     <Stack.Screen name="Login" component={LoginScreen} />
     <Stack.Screen name="Register" component={RegisterScreen} />
-    <Stack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
   </Stack.Navigator>
 );
 
@@ -256,17 +254,17 @@ const LoadingScreen = ({ isAuthReady, onFinished }) => {
 };
 
 const AppNavigator = () => {
-  const { session, loading, pendingNavigation, consumePendingNavigation } = useAuth();
+  const { session, user, initializing, pendingNavigation, consumePendingNavigation } = useAuth();
   const [navReady, setNavReady] = React.useState(false);
   const [hasShownLoading, setHasShownLoading] = React.useState(false);
   const [transitionDone, setTransitionDone] = React.useState(false);
 
   React.useEffect(() => {
-    if (loading) {
+    if (initializing) {
       setHasShownLoading(true);
       setTransitionDone(false);
     }
-  }, [loading]);
+  }, [initializing]);
 
   React.useEffect(() => {
     if (!session || !pendingNavigation || !navReady || !navigationRef.isReady()) return;
@@ -277,15 +275,19 @@ const AppNavigator = () => {
     navigationRef.navigate(next.screen, next.params);
   }, [consumePendingNavigation, navReady, pendingNavigation, session]);
 
-  const shouldShowLoading = loading || (hasShownLoading && !transitionDone);
+  const shouldShowLoading = initializing || (hasShownLoading && !transitionDone);
 
   if (shouldShowLoading) {
-    return <LoadingScreen isAuthReady={!loading} onFinished={() => setTransitionDone(true)} />;
+    return <LoadingScreen isAuthReady={!initializing} onFinished={() => setTransitionDone(true)} />;
   }
 
   return (
     <NavigationContainer ref={navigationRef} onReady={() => setNavReady(true)}>
-      {session ? <MainStack /> : <AuthStack />}
+      {session ? (
+        user?.display_name ? <MainStack /> : <AuthStack key="profile-completion" initialRouteName="Register" />
+      ) : (
+        <AuthStack key="signed-out" />
+      )}
     </NavigationContainer>
   );
 };

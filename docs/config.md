@@ -4,6 +4,60 @@ The MeetUp mobile client requires a few environment variables to function correc
 
 ## Environment Variables
 
+### Phone OTP Auth
+
+### `AUTH_JWT_SECRET`
+- **Description:** JWT signing secret for OTP-issued access tokens.
+- **Required:** Recommended in all environments. Falls back to `SUPABASE_KEY` if unset.
+
+### `AUTH_ACCESS_TOKEN_TTL_SECONDS`
+- **Description:** Access token lifetime in seconds.
+- **Default:** `86400`
+
+### `OTP_TTL_SECONDS`
+- **Description:** OTP validity window in seconds.
+- **Default:** `300` (5 minutes)
+
+### `OTP_START_LIMIT_PER_PHONE`
+- **Description:** Max OTP starts per phone per minute.
+- **Default:** `5`
+
+### `OTP_START_LIMIT_PER_IP`
+- **Description:** Max OTP starts per client IP per minute.
+- **Default:** `20`
+
+### `OTP_VERIFY_LIMIT_PER_PHONE`
+- **Description:** Max OTP verify attempts per phone per minute.
+- **Default:** `10`
+
+### `OTP_VERIFY_LIMIT_PER_IP`
+- **Description:** Max OTP verify attempts per client IP per minute.
+- **Default:** `30`
+
+### `OTP_DEV_ECHO_ENABLED`
+- **Description:** Development-only helper that includes `dev_otp_code` in `/auth/otp/start` response.
+- **Default:** `false`
+- **Safety Guard:** Ignored when `ENVIRONMENT=production`.
+- **Usage:** Enable only for local/manual QA when no OTP provider is wired yet.
+
+### `PHONE_HASH_PEPPER`
+- **Description:** Server-side pepper used for `phone_hash = HMAC_SHA256(pepper, phone_e164)`.
+- **Required:** Yes. Use a strong secret in production.
+
+### Contacts Matching
+
+### `CONTACTS_HASH_VERSION`
+- **Description:** Version prefix used in client digest derivation (`SHA256("v{version}:" + phone_e164)`).
+- **Default:** `1`
+
+### `CONTACTS_MATCH_MAX_DIGESTS`
+- **Description:** Max digests allowed per `/contacts/match` request.
+- **Default:** `500`
+
+### `CONTACTS_MATCH_LIMIT_PER_MINUTE`
+- **Description:** Max `/contacts/match` calls per authenticated user per minute.
+- **Default:** `30`
+
 ### `EXPO_PUBLIC_API_BASE_URL`
 - **Description:** The root URL of the backend API (e.g. `https://meetup-api.example.com/api/v1`).
 - **Required:** **Yes in Production.** Optional in Development (`__DEV__`).

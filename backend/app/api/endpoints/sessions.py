@@ -1,6 +1,5 @@
 import json
 import secrets
-import time
 from datetime import datetime, timedelta
 from typing import Optional
 from uuid import UUID
@@ -12,14 +11,13 @@ from sqlalchemy.orm import Session
 from app.api import deps
 from app.core.database import get_db
 from app.core.idempotency import check_and_cache_idempotency, get_cached_response, get_idempotency_key
-from app.core.metrics import track_manual_end, track_session_start_latency_ms
+from app.core.metrics import track_manual_end
 from app.core.redis import get_redis
 from app.models.meet_request import MeetRequest, RequestStatus
 from app.models.invite import Invite
 from app.models.session import ParticipantStatus, SessionParticipant, SessionStatus
 from app.models.session import Session as MeetSession
 from app.models.user import User
-from app.realtime.connection_manager import manager
 
 router = APIRouter()
 
@@ -72,8 +70,6 @@ async def create_session_from_request(
     Create an ACTIVE session from an ACCEPTED meet request.
     Idempotent: same request (same idempotency_key) returns same result.
     """
-    _start_ms = time.monotonic() * 1000  # session_start_latency_ms measurement start
-
     # Check cache if idempotency key provided
     if idempotency_key:
         cached = await get_cached_response("create_session_from_request", current_user.id, idempotency_key)
@@ -128,14 +124,8 @@ async def create_session_from_request(
     db.commit()
     db.refresh(session)
 
-    # Emit session_start_latency_ms: total time from handler entry to DB commit
-    track_session_start_latency_ms(
-        session_id=str(session.id),
-        latency_ms=time.monotonic() * 1000 - _start_ms,
-    )
-
     response = {"session_id": str(session.id), "status": session.status}
-
+    
     # Cache response if idempotency key provided
     if idempotency_key:
         await check_and_cache_idempotency("create_session_from_request", current_user.id, idempotency_key, response)
@@ -317,7 +307,6 @@ async def redeem_invite_token(
 async def get_session_snapshot(
     session_id: UUID,
     db: Session = Depends(get_db),
-    current_user: User = Depends(deps.get_current_user),
 ):
     """
     Get current snapshot of all locations in a session (from Redis).
@@ -328,10 +317,6 @@ async def get_session_snapshot(
     session = db.query(MeetSession).filter(MeetSession.id == session_id).first()
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    
-    # SECURITY: Verify participation (Fix V1)
-    if not _is_participant(db, session_id, current_user.id):
-        raise HTTPException(status_code=403, detail="Not authorized to view this session")
 
     redis_client = await get_redis()
 
@@ -510,40 +495,3 @@ def get_session_participants(
         })
     
     return result
-
-
-@router.post("/{session_id}/force_end")
-async def force_end_session(
-    session_id: UUID,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(deps.get_current_user),
-):
-    """
-    Force end an active session. Participant only.
-    """
-    session = db.query(MeetSession).filter(MeetSession.id == session_id).first()
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-        
-    if not _is_participant(db, session_id, current_user.id):
-        raise HTTPException(status_code=403, detail="Not a participant")
-
-    if session.status == SessionStatus.ENDED:
-        return {"message": "Session already ended", "status": session.status}
-
-    session.status = SessionStatus.ENDED
-    session.ended_at = datetime.utcnow()
-    session.end_reason = "FORCE_ENDED"
-    db.commit()
-
-    # Broadcast session ended
-    from app.realtime.schemas import SessionEndedEvent, SessionEndedPayload
-    event = SessionEndedEvent(
-        payload=SessionEndedPayload(
-            reason="FORCE_ENDED",
-            ended_at=datetime.utcnow()
-        )
-    )
-    await manager.broadcast(session_id, event.model_dump_json())
-    
-    return {"message": "Session force ended", "status": session.status}

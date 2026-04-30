@@ -14,7 +14,7 @@ const TIMELINE_ITEM_WIDTH = Math.max(132, Math.floor((SCREEN_WIDTH - 92) / 2));
 
 const HomeScreen = ({ navigation, route }) => {
     const { colors } = useTheme();
-    const { user, activeSessionHint } = useAuth();
+    const { user, activeSessionHint, clearActiveSessionHint } = useAuth();
     const [activeSession, setActiveSession] = useState(null);
     const [incomingRequests, setIncomingRequests] = useState([]);
     const [outgoingRequests, setOutgoingRequests] = useState([]);
@@ -125,6 +125,7 @@ const HomeScreen = ({ navigation, route }) => {
                     lastKnownActiveSessionRef.current = null;
                     setActiveSession(null);
                     activeSessionIdRef.current = null;
+                    clearActiveSessionHint();
                 } else if (lastKnownActiveSessionRef.current) {
                     setActiveSession(lastKnownActiveSessionRef.current);
                 }
@@ -141,7 +142,6 @@ const HomeScreen = ({ navigation, route }) => {
                     id: firstPending.receiver_id,
                     display_name: firstPending.receiver_name || 'Friend',
                     name: firstPending.receiver_name || 'Friend',
-                    email: firstPending.receiver_email,
                 };
             }
 
@@ -231,7 +231,7 @@ const HomeScreen = ({ navigation, route }) => {
             setIsRefreshing(false);
             setHasLoadedOnce(true);
         }
-    }, [bannerOp, bannerSlide]);
+    }, [bannerOp, bannerSlide, clearActiveSessionHint, navigation]);
 
     useFocusEffect(useCallback(() => {
         fetchData();
@@ -252,7 +252,7 @@ const HomeScreen = ({ navigation, route }) => {
     const displayActiveSession = activeSession || lastKnownActiveSessionRef.current || activeSessionHint || (activeSessionIdRef.current
         ? { session_id: activeSessionIdRef.current, peer_name: 'Friend' }
         : null);
-    const displayName = user?.email?.split('@')[0] || 'You';
+    const displayName = user?.display_name || user?.phone_e164 || 'You';
     const ambientUp = ambientFloat.interpolate({ inputRange: [0, 1], outputRange: [0, -14] });
     const ambientDown = ambientFloat.interpolate({ inputRange: [0, 1], outputRange: [0, 12] });
 
