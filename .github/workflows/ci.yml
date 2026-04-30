@@ -32,6 +32,9 @@ jobs:
 
       - name: Run security and integration tests
         run: |
+          docker compose exec -T backend pytest -q tests/test_otp_auth.py
+          docker compose exec -T backend pytest -q tests/test_contacts_match.py
+          docker compose exec -T backend pytest -q tests/test_invite_accept_flow.py
           docker compose exec -T backend pytest -q tests/test_authorization.py
           docker compose exec -T backend pytest -q tests/test_rate_limits.py
           docker compose exec -T backend pytest -q tests/test_metrics_store.py tests/test_metrics_cross_process.py

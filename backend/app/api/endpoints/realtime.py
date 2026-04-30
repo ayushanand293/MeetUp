@@ -9,6 +9,7 @@ from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect, status
 from jwt import PyJWTError
 
 from app.core.config import settings
+from app.core.auth_sessions import enforce_active_session
 from app.core.metrics import (
     track_location_propagation_latency_ms,
     track_message_received,
@@ -81,9 +82,27 @@ async def websocket_endpoint(
                 raise ValueError(f"Unknown key ID: {kid}")
             payload = jwt.decode(token, public_key, algorithms=["ES256"], options={"verify_aud": False})
         else:
-            payload = jwt.decode(token, settings.SUPABASE_KEY, algorithms=["HS256"], options={"verify_aud": False})
+            payload = None
+            secrets_to_try = [settings.SUPABASE_KEY]
+            if settings.AUTH_JWT_SECRET:
+                secrets_to_try.insert(0, settings.AUTH_JWT_SECRET)
+            for decode_secret in secrets_to_try:
+                if not decode_secret:
+                    continue
+                try:
+                    payload = jwt.decode(token, decode_secret, algorithms=["HS256"], options={"verify_aud": False})
+                    break
+                except PyJWTError:
+                    continue
+            if payload is None:
+                raise ValueError("Could not validate credentials")
 
         user_id = UUID(payload.get("sub"))
+        if payload.get("iss") == "meetup-otp":
+            try:
+                enforce_active_session(str(user_id), payload.get("sid"))
+            except Exception as exc:
+                raise ValueError("Session invalidated") from exc
     except (PyJWTError, ValueError) as e:
         logger.warning(scrub_sensitive(f"WebSocket Auth Failed: {e}"))
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)

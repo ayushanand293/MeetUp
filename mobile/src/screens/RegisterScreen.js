@@ -1,149 +1,222 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
-    View, Text, TextInput, TouchableOpacity, StyleSheet,
-    Alert, ActivityIndicator, KeyboardAvoidingView, Platform,
-    ScrollView, Animated, Image,
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  StyleSheet,
+  Alert,
+  ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
 } from 'react-native';
+
 import { useAuth } from '../context/AuthContext';
-import client from '../api/client';
-import { useTheme, Spacing, Radius, Font, anim } from '../theme';
+import PhoneNumberInput, { buildE164Phone, splitE164Phone } from '../components/PhoneNumberInput';
+import { useTheme, Spacing, Radius, Font } from '../theme';
 
 const RegisterScreen = ({ navigation }) => {
-    const { colors } = useTheme();
-    const [name, setName] = useState('');
-    const [email, setEmail] = useState('');
-    const [password, setPassword] = useState('');
-    const [confirm, setConfirm] = useState('');
-    const [focused, setFocused] = useState(null);
-    const { signUpWithEmail, loading } = useAuth();
+  const { colors } = useTheme();
+  const { session, user, signInWithPhone, verifyPhoneOTP, updateAccountDetails, loading } = useAuth();
+  const initialPhone = splitE164Phone(user?.phone_e164 || '');
 
-    const cardY = useRef(new Animated.Value(40)).current;
-    const cardOpacity = useRef(new Animated.Value(0)).current;
-    const btnScale = useRef(new Animated.Value(1)).current;
-    const ambient = useRef(new Animated.Value(0)).current;
+  const [countryCode, setCountryCode] = useState(initialPhone.countryCode);
+  const [phone, setPhone] = useState(initialPhone.localNumber);
+  const [otp, setOtp] = useState('');
+  const [otpSent, setOtpSent] = useState(false);
+  const [phoneVerified, setPhoneVerified] = useState(Boolean(session));
+  const [displayName, setDisplayName] = useState(user?.display_name || '');
 
-    useEffect(() => {
-        Animated.parallel([
-            Animated.spring(cardY, { toValue: 0, useNativeDriver: true, tension: 80 }),
-            Animated.timing(cardOpacity, { toValue: 1, duration: 400, useNativeDriver: true }),
-        ]).start();
-    }, []);
+  useEffect(() => {
+    if (!session) return;
+    setPhoneVerified(true);
+    setOtpSent(false);
+    setOtp('');
+    if (user?.phone_e164) {
+      const nextPhone = splitE164Phone(user.phone_e164);
+      setCountryCode(nextPhone.countryCode);
+      setPhone(nextPhone.localNumber);
+    }
+    if (user?.display_name) setDisplayName(user.display_name);
+  }, [session, user]);
 
-    useEffect(() => {
-        const loop = Animated.loop(
-            Animated.sequence([
-                Animated.timing(ambient, { toValue: 1, duration: 2800, useNativeDriver: true }),
-                Animated.timing(ambient, { toValue: 0, duration: 2800, useNativeDriver: true }),
-            ])
-        );
-        loop.start();
-        return () => loop.stop();
-    }, [ambient]);
+  const phoneE164 = buildE164Phone(countryCode, phone);
 
-    const handleRegister = async () => {
-        if (!name.trim() || !email.trim() || !password || !confirm) { Alert.alert('Missing fields', 'Fill in all fields'); return; }
-        if (password !== confirm) { Alert.alert('Error', 'Passwords do not match'); return; }
-        if (password.length < 6) { Alert.alert('Error', 'Password must be at least 6 characters'); return; }
-        try {
-            await signUpWithEmail(email.trim(), password);
-            Alert.alert('✓ Account Created', 'Check your email for a confirmation link, then sign in.',
-                [{ text: 'Sign In', onPress: () => navigation.navigate('Login', { pendingName: name.trim() }) }]);
-        } catch (e) { Alert.alert('Registration failed', e.message); }
-    };
+  const handleSendOtp = async () => {
+    if (!phoneE164) {
+      Alert.alert('Missing field', 'Select a country code and enter your phone number.');
+      return;
+    }
 
-    const Field = ({ label, ...props }) => (
-        <View style={{ marginBottom: Spacing.md }}>
-            <Text style={[Font.label, { color: colors.textMuted, marginBottom: 6 }]}>{label}</Text>
-            <TextInput
-                style={{
-                    backgroundColor: colors.surfaceSoft || colors.inputBg, borderWidth: 1,
-                    borderColor: focused === label ? colors.textMuted : colors.border,
-                    borderRadius: Radius.md, padding: 14, color: colors.textPrimary, fontSize: 15,
-                }}
+    try {
+      const result = await signInWithPhone(phoneE164);
+      setOtpSent(true);
+      const devCodeMessage = result?.dev_otp_code
+        ? `\n\nLocal dev code: ${result.dev_otp_code}`
+        : '';
+      Alert.alert('Code sent', `Enter the 6 digit OTP to continue.${devCodeMessage}`);
+    } catch (error) {
+      Alert.alert('Could not send code', error?.response?.data?.detail || error?.message || 'Please check your number and try again.');
+    }
+  };
+
+  const handleVerifyOtp = async () => {
+    if (!otp.trim()) {
+      Alert.alert('Missing field', 'Enter the OTP code.');
+      return;
+    }
+
+    try {
+      await verifyPhoneOTP(phoneE164, otp.trim());
+      setPhoneVerified(true);
+      Alert.alert('Phone verified', 'Finish your profile to continue.');
+    } catch (error) {
+      Alert.alert('Invalid code', error?.response?.data?.detail || error?.message || 'Please check the code and try again.');
+    }
+  };
+
+  const handleSave = async () => {
+    if (!phoneVerified && !session) {
+      Alert.alert('Phone OTP required', 'Verify your phone number before saving your profile.');
+      return;
+    }
+    if (!displayName.trim()) {
+      Alert.alert('Missing field', 'Display name is required.');
+      return;
+    }
+
+    try {
+      await updateAccountDetails({
+        display_name: displayName.trim(),
+      });
+      Alert.alert('Saved', 'Profile updated successfully.');
+      navigation.navigate('Home');
+    } catch (error) {
+      Alert.alert('Could not save', error?.message || 'Please try again.');
+    }
+  };
+
+  return (
+    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={[styles.root, { backgroundColor: colors.bg }]}>
+      <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
+        <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+          <Text style={[Font.title, { color: colors.textPrimary }]}>Create account</Text>
+          <Text style={[Font.body, { color: colors.textSecondary, marginTop: 6 }]}>Verify your phone first, then add your display name.</Text>
+
+          <PhoneNumberInput
+            countryCode={countryCode}
+            localNumber={phone}
+            onCountryCodeChange={nextCountryCode => {
+              setCountryCode(nextCountryCode);
+              setPhoneVerified(false);
+              setOtpSent(false);
+              setOtp('');
+            }}
+            onLocalNumberChange={text => {
+              setPhone(text);
+              setPhoneVerified(false);
+              setOtpSent(false);
+              setOtp('');
+            }}
+            editable={!phoneVerified && !loading}
+          />
+
+          {otpSent && !phoneVerified && (
+            <>
+              <Text style={[Font.label, { color: colors.textMuted, marginTop: Spacing.md }]}>OTP CODE</Text>
+              <TextInput
+                style={[styles.input, { color: colors.textPrimary, borderColor: colors.border, backgroundColor: colors.surfaceElevated }]}
+                placeholder="123456"
                 placeholderTextColor={colors.textMuted}
-                onFocus={() => setFocused(label)} onBlur={() => setFocused(null)} {...props}
-            />
+                value={otp}
+                onChangeText={setOtp}
+                keyboardType="number-pad"
+                autoCapitalize="none"
+                maxLength={6}
+              />
+            </>
+          )}
+
+          <TouchableOpacity
+            style={[
+              styles.secondaryButton,
+              { borderColor: colors.border, backgroundColor: colors.surfaceElevated, opacity: loading || phoneVerified ? 0.65 : 1 },
+            ]}
+            onPress={otpSent ? handleVerifyOtp : handleSendOtp}
+            disabled={loading || phoneVerified}>
+            {loading ? (
+              <ActivityIndicator color={colors.textPrimary} />
+            ) : (
+              <Text style={[styles.secondaryButtonLabel, { color: colors.textPrimary }]}>
+                {phoneVerified ? 'Phone Verified' : otpSent ? 'Verify Phone' : 'Send OTP'}
+              </Text>
+            )}
+          </TouchableOpacity>
+
+          <Text style={[Font.label, { color: colors.textMuted, marginTop: Spacing.lg }]}>DISPLAY NAME</Text>
+          <TextInput
+            style={[styles.input, { color: colors.textPrimary, borderColor: colors.border, backgroundColor: colors.surfaceElevated }]}
+            placeholder="Your name"
+            placeholderTextColor={colors.textMuted}
+            value={displayName}
+            onChangeText={setDisplayName}
+            editable={phoneVerified && !loading}
+          />
+
+          <TouchableOpacity
+            style={[styles.button, { backgroundColor: colors.textPrimary, opacity: loading || !phoneVerified ? 0.6 : 1 }]}
+            onPress={handleSave}
+            disabled={loading || !phoneVerified}>
+            {loading ? <ActivityIndicator color={colors.bg} /> : <Text style={[styles.buttonLabel, { color: colors.bg }]}>Save Profile</Text>}
+          </TouchableOpacity>
+
+          {!session && (
+            <TouchableOpacity onPress={() => navigation.navigate('Login')} style={{ marginTop: Spacing.md }}>
+              <Text style={[Font.caption, { color: colors.textMuted }]}>Back to OTP login</Text>
+            </TouchableOpacity>
+          )}
         </View>
-    );
-
-    return (
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1, backgroundColor: colors.bg }}>
-            <Animated.View
-                pointerEvents="none"
-                style={{
-                    position: 'absolute',
-                    width: 210,
-                    height: 210,
-                    borderRadius: 105,
-                    top: -70,
-                    right: -50,
-                    backgroundColor: colors.accentBg,
-                    opacity: 0.95,
-                    transform: [{ translateY: ambient.interpolate({ inputRange: [0, 1], outputRange: [0, -12] }) }],
-                }}
-            />
-            <ScrollView contentContainerStyle={{ flexGrow: 1, padding: Spacing.lg, justifyContent: 'center' }} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-
-                <View style={{ alignItems: 'center', marginBottom: Spacing.xl }}>
-                    <TouchableOpacity style={{ alignSelf: 'flex-start', marginBottom: Spacing.md }} onPress={() => navigation.goBack()}>
-                        <Text style={{ color: colors.textSecondary, fontSize: 28 }}>‹</Text>
-                    </TouchableOpacity>
-                    <View style={{ width: 92, height: 92, borderRadius: 24, backgroundColor: colors.surface, borderWidth: 1.5, borderColor: colors.border, justifyContent: 'center', alignItems: 'center', marginBottom: Spacing.md, shadowColor: colors.textPrimary, shadowOpacity: 0.09, shadowRadius: 14, shadowOffset: { width: 0, height: 8 }, elevation: 4 }}>
-                        <Image source={require('../../assets/Meet up logo.png')} style={{ width: 72, height: 72 }} resizeMode="contain" />
-                    </View>
-                    <Text style={[Font.title, { color: colors.textPrimary }]}>Create account</Text>
-                    <Text style={[Font.caption, { color: colors.textMuted, marginTop: 4, marginBottom: 6 }]}>START YOUR FIRST SESSION</Text>
-                    <Text style={[Font.body, { color: colors.textSecondary }]}>Join MeetUp today</Text>
-                </View>
-
-                <Animated.View style={{
-                    backgroundColor: colors.surface,
-                    borderRadius: Radius.xl,
-                    padding: Spacing.lg,
-                    borderWidth: 1,
-                    borderColor: colors.border,
-                    opacity: cardOpacity,
-                    transform: [{ translateY: cardY }],
-                    shadowColor: colors.textPrimary,
-                    shadowOpacity: 0.08,
-                    shadowOffset: { width: 0, height: 10 },
-                    shadowRadius: 16,
-                    elevation: 5,
-                }}>
-                    <Field label="YOUR NAME" value={name} onChangeText={setName} placeholder="How should we call you?" autoCapitalize="words" />
-                    <Field label="EMAIL" value={email} onChangeText={setEmail} placeholder="you@example.com" keyboardType="email-address" autoCapitalize="none" />
-                    <Field label="PASSWORD" value={password} onChangeText={setPassword} placeholder="Min. 6 characters" secureTextEntry />
-                    <Field label="CONFIRM" value={confirm} onChangeText={setConfirm} placeholder="Repeat password" secureTextEntry />
-                    <Animated.View style={{ transform: [{ scale: btnScale }] }}>
-                        <TouchableOpacity
-                            style={{
-                                backgroundColor: colors.textPrimary,
-                                borderRadius: Radius.md,
-                                paddingVertical: 15,
-                                alignItems: 'center',
-                                marginTop: Spacing.sm,
-                                shadowColor: colors.textPrimary,
-                                shadowOpacity: 0.08,
-                                shadowOffset: { width: 0, height: 8 },
-                                shadowRadius: 12,
-                                elevation: 3,
-                            }}
-                            onPressIn={() => anim.pressIn(btnScale)} onPressOut={() => anim.pressOut(btnScale)}
-                            onPress={handleRegister} disabled={loading}>
-                            {loading ? <ActivityIndicator color={colors.bg} /> : <Text style={{ color: colors.bg, fontSize: 15, fontWeight: '700' }}>Create Account</Text>}
-                        </TouchableOpacity>
-                    </Animated.View>
-                </Animated.View>
-
-                <View style={{ flexDirection: 'row', justifyContent: 'center', marginTop: Spacing.xl }}>
-                    <Text style={[Font.body, { color: colors.textSecondary }]}>Already have an account? </Text>
-                    <TouchableOpacity onPress={() => navigation.navigate('Login')}>
-                        <Text style={[Font.body, { color: colors.textPrimary, fontWeight: '700' }]}>Sign in</Text>
-                    </TouchableOpacity>
-                </View>
-            </ScrollView>
-        </KeyboardAvoidingView>
-    );
+      </ScrollView>
+    </KeyboardAvoidingView>
+  );
 };
+
+const styles = StyleSheet.create({
+  root: { flex: 1 },
+  scroll: { flexGrow: 1, justifyContent: 'center', padding: Spacing.lg },
+  card: {
+    borderWidth: 1,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+  },
+  input: {
+    borderWidth: 1,
+    borderRadius: Radius.md,
+    padding: 14,
+    marginTop: 6,
+  },
+  button: {
+    marginTop: Spacing.lg,
+    borderRadius: Radius.md,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  secondaryButton: {
+    marginTop: Spacing.md,
+    borderWidth: 1,
+    borderRadius: Radius.md,
+    paddingVertical: 13,
+    alignItems: 'center',
+  },
+  secondaryButtonLabel: {
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  buttonLabel: {
+    fontSize: 15,
+    fontWeight: '700',
+  },
+});
 
 export default RegisterScreen;

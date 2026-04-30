@@ -57,9 +57,15 @@ def _display_name(user: User | None) -> str:
     if preferred:
         return str(preferred)
 
+    if user.display_name:
+        return user.display_name
+
     email_prefix = (user.email or "").split("@", 1)[0].strip()
     if email_prefix:
         return email_prefix.replace(".", " ").replace("_", " ").title()
+
+    if user.phone_e164:
+        return f"User {user.phone_e164[-4:]}"
 
     return "Peer"
 

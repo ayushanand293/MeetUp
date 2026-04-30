@@ -10,7 +10,7 @@ import { useTheme, Spacing, Radius, Font } from '../theme';
 
 const AcceptRequestScreen = ({ route, navigation }) => {
     const { colors } = useTheme();
-    const { linkedRequestId, fromInvite } = route.params || {};
+    const { linkedRequestId, inviteToken, requesterName, fromInvite } = route.params || {};
     const [requests, setRequests] = useState([]);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
@@ -103,6 +103,31 @@ const AcceptRequestScreen = ({ route, navigation }) => {
     const handleDecline = async (req) => {
         try { await client.post(`/requests/${req.id}/decline`); setRequests(prev => prev.filter(r => r.id !== req.id)); }
         catch { Alert.alert('Could Not Decline Request', 'Please try again in a moment.'); }
+    };
+
+    const handleInviteAccept = async () => {
+        if (!inviteToken) return;
+        setAcceptingId('invite-token');
+        try {
+            const res = await client.post(`/invites/${encodeURIComponent(inviteToken)}/redeem`);
+            const sessionId = res?.data?.session_id;
+            if (!sessionId) {
+                Alert.alert('Could Not Accept Invite', 'Invite redeemed but no active session was returned.');
+                return;
+            }
+            clearInterval(pollRef.current);
+            navigation.navigate('ActiveSession', {
+                sessionId,
+                friend: { name: requesterName || 'Friend', display_name: requesterName || 'Friend' },
+            });
+        } catch (err) {
+            Alert.alert(
+                err?.response?.status === 410 ? 'Invite Expired' : 'Could Not Accept Invite',
+                err?.response?.status === 410 ? 'This invite has expired. Ask for a new link.' : 'Please try again.'
+            );
+        } finally {
+            setAcceptingId(null);
+        }
     };
 
     if (loading) {
@@ -205,6 +230,39 @@ const AcceptRequestScreen = ({ route, navigation }) => {
                 </View>
             )}
 
+            {!linkedRequestFound && !!inviteToken && (
+                <View style={{
+                    marginBottom: Spacing.md,
+                    borderWidth: 1,
+                    borderColor: colors.borderLight,
+                    backgroundColor: colors.surfaceElevated,
+                    borderRadius: Radius.sm,
+                    paddingHorizontal: 10,
+                    paddingVertical: 10,
+                }}>
+                    <Text style={{ color: colors.textPrimary, fontWeight: '700', fontSize: 12 }}>
+                        {requesterName ? `${requesterName} wants to meet.` : 'You have an invite to meet now.'}
+                    </Text>
+                    <TouchableOpacity
+                        onPress={handleInviteAccept}
+                        disabled={acceptingId === 'invite-token'}
+                        style={{
+                            marginTop: 10,
+                            backgroundColor: colors.textPrimary,
+                            borderRadius: Radius.md,
+                            paddingVertical: 10,
+                            alignItems: 'center',
+                            opacity: acceptingId === 'invite-token' ? 0.7 : 1,
+                        }}>
+                        {acceptingId === 'invite-token' ? (
+                            <ActivityIndicator size="small" color={colors.bg} />
+                        ) : (
+                            <Text style={{ color: colors.bg, fontWeight: '700' }}>Accept Invite</Text>
+                        )}
+                    </TouchableOpacity>
+                </View>
+            )}
+
             {requests.length === 0 ? (
                 <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingBottom: 80 }}>
                     <Text style={{ fontSize: 52, color: colors.textMuted, marginBottom: Spacing.md }}>◎</Text>
@@ -261,7 +319,6 @@ const RequestCard = ({ item, index, colors, accepting, onAccept, onDecline, link
                 </View>
                 <View style={{ flex: 1 }}>
                     <Text style={[Font.subtitle, { color: colors.textPrimary, fontSize: 15 }]}>{item.requester_name}</Text>
-                    <Text style={[Font.caption, { color: colors.textMuted, marginTop: 2 }]}>{item.requester_email}</Text>
                 </View>
                 {linked && (
                     <View style={{

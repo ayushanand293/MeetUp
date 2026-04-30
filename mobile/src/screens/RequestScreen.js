@@ -269,7 +269,6 @@ const RequestScreen = ({ route, navigation }) => {
                 </View>
 
                 <Text style={[Font.title, { color: colors.textPrimary, textAlign: 'center', marginBottom: 4 }]}>{friend?.display_name || 'Unknown'}</Text>
-                <Text style={[Font.body, { color: colors.textSecondary, textAlign: 'center', fontSize: 13 }]}>{friend?.email}</Text>
 
                 <View style={{ height: 1, backgroundColor: colors.border, width: '100%', marginVertical: Spacing.lg }} />
 

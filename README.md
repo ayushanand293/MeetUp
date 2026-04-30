@@ -46,7 +46,7 @@ The session is ephemeral — no location history is stored after it ends. Privac
 | **Realtime** | WebSockets (FastAPI native), Redis Pub/Sub |
 | **Database** | PostgreSQL 15 + PostGIS extension |
 | **Cache / Broker** | Redis |
-| **Auth** | Supabase JWT (verified server-side via `pyjwt`) |
+| **Auth** | Phone OTP (E.164) with backend-issued JWT (`pyjwt`) |
 | **Migrations** | Alembic |
 | **Containerisation** | Docker + Docker Compose |
 | **Linting** | Ruff (Python), ESLint + Prettier (JS) |
@@ -136,8 +136,16 @@ When User A (connected to API-1) sends a location update:
 ## Key Features
 
 ### 🔐 Auth & Identity
-- JWT-based auth, issued by Supabase, verified server-side on every request and WebSocket upgrade
-- User registration and login handled on the mobile client; backend is stateless
+- Phone number in E.164 format is mandatory identity
+- OTP start/verify endpoints issue JWTs after successful OTP validation
+- Email is optional and used as recovery contact in profile settings
+
+### 📇 Contacts-First Find Friends
+- App reads local contacts with permission and normalizes phone numbers to E.164
+- Client sends SHA256 digests (versioned), never raw contact numbers
+- Backend returns matched users only; unmatched contacts stay local and are used for invite sharing
+- Tapping Meet on matched contacts creates a normal meet request (accept required before session)
+- Tapping Invite on unmatched contacts creates invite token + deep link share flow
 
 ### 🤝 Meet Requests
 - Users can search friends and send a **meet request**

@@ -77,12 +77,11 @@ const QuickFriendsScreen = ({ navigation }) => {
     }, [history]);
 
     const handleMeetAgain = (friend) => {
-        if (friend.co_participant_id && friend.co_participant_email) {
+        if (friend.co_participant_id) {
             navigation.navigate('Request', {
                 friend: {
                     id: friend.co_participant_id,
                     display_name: friend.co_participant_name,
-                    email: friend.co_participant_email,
                 },
             });
             return;

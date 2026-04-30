@@ -398,7 +398,6 @@ const IncomingRequestCard = ({ item, index, colors, accepting, onAccept, onDecli
                 </View>
                 <View style={{ flex: 1 }}>
                     <Text style={[Font.subtitle, { color: colors.textPrimary, fontSize: 15 }]}>{item.requester_name}</Text>
-                    <Text style={[Font.caption, { color: colors.textMuted, marginTop: 2 }]}>{item.requester_email}</Text>
                 </View>
                 {linked && (
                     <View style={{

@@ -33,8 +33,8 @@ import { useAuth } from '../context/AuthContext';
 import locationService from '../services/locationService';
 import realtimeService from '../services/realtimeService';
 import client from '../api/client';
+import { authStorage } from '../api/authStorage';
 import analyticsService from '../services/analyticsService';
-import { supabase } from '../api/supabase';
 import { getRoute, formatDistance, formatDuration, haversineDistance, TransportMode } from '../services/orsService';
 import { useTheme, Spacing, Radius, Font } from '../theme';
 import ModernDistanceBar from '../components/ModernDistanceBar';
@@ -378,8 +378,8 @@ const ActiveSessionScreen = ({ route, navigation }) => {
 
         // 5. Connect WebSocket with real auth token
         DEBUG && console.log('[ActiveSessionScreen] Connecting WebSocket...');
-        const { data: { session: supabaseSession } } = await supabase.auth.getSession();
-        if (!supabaseSession?.access_token) {
+        const accessToken = await authStorage.getAccessToken();
+        if (!accessToken) {
           throw new Error('You are not signed in. Please sign in and try again.');
         }
 
@@ -387,7 +387,7 @@ const ActiveSessionScreen = ({ route, navigation }) => {
 
         const wsBaseUrl = client.defaults.baseURL.replace('/api/v1', '');
         await realtimeService.connect(
-          supabaseSession.access_token,
+          accessToken,
           activeSessionId,
           wsBaseUrl
         );
@@ -531,6 +531,7 @@ const ActiveSessionScreen = ({ route, navigation }) => {
 
       if (payload.reason === 'PROXIMITY_REACHED' || payload.reason === 'MANUAL_CONFIRM') {
         if (arrivalTimerRef.current) clearInterval(arrivalTimerRef.current);
+        clearActiveSessionHint();
         setIsConfirmingArrival(false);
         setMeetingSuccess(true);
         
