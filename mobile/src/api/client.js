@@ -59,7 +59,7 @@ const resolveApiBaseUrl = () => {
     throw new Error('CRITICAL: EXPO_PUBLIC_API_BASE_URL is not set for production build.');
 };
 
-const BASE_URL = resolveApiBaseUrl();
+export const BASE_URL = resolveApiBaseUrl();
 
 console.log('API Client initialized with Base URL:', BASE_URL);
 

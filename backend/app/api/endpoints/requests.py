@@ -3,12 +3,20 @@ from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from sqlalchemy.orm import Session
 
 from app.api import deps
 from app.core.database import get_db
+from app.core.destinations import (
+    DestinationPayload,
+    apply_destination,
+    copy_destination,
+    destination_from_model,
+    destination_validation_exception,
+)
 from app.core.idempotency import check_and_cache_idempotency, get_cached_response, get_idempotency_key
+from app.core.metrics import get_metrics
 from app.core.rate_limit import enforce_rate_limit
 from app.models.meet_request import MeetRequest, RequestStatus
 from app.models.session import Session as MeetSession
@@ -21,6 +29,7 @@ router = APIRouter()
 
 class CreateRequestBody(BaseModel):
     to_user_id: UUID
+    destination: dict | None = None
 
 
 def _is_expired(req: MeetRequest) -> bool:
@@ -150,10 +159,24 @@ async def create_meet_request(
             detail="Request already being discussed. A request is pending from both directions. Accept or decline the existing request first."
         )
 
+    destination = None
+    if body and body.destination is not None:
+        try:
+            destination = DestinationPayload.model_validate(body.destination)
+        except ValidationError as exc:
+            raise destination_validation_exception(exc) from exc
+
     req = MeetRequest(requester_id=current_user.id, receiver_id=receiver_id)
+    try:
+        apply_destination(req, destination)
+    except ValueError as exc:
+        raise destination_validation_exception(exc) from exc
     db.add(req)
     db.commit()
     db.refresh(req)
+    if destination_from_model(req):
+        get_metrics().increment_counter("destination_selected_total")
+        get_metrics().increment_counter("destination_requests_sent_total")
     return req
 
 
@@ -181,6 +204,7 @@ def list_pending_requests(
             "expires_at": r.expires_at,
             "requester_email": r.requester.email,
             "requester_name": _display_name(r.requester),
+            "destination": destination_from_model(r),
         }
         for r in requests
     ]
@@ -213,6 +237,7 @@ def list_outgoing_requests(
             "expires_at": r.expires_at,
             "receiver_name": _display_name(r.receiver),
             "receiver_email": r.receiver.email,
+            "destination": destination_from_model(r),
         }
         for r in requests
     ]
@@ -275,6 +300,7 @@ async def accept_request(
     db.flush()
 
     session = MeetSession(status=SessionStatus.ACTIVE)
+    copy_destination(req, session)
     db.add(session)
     db.flush()
 
@@ -292,6 +318,8 @@ async def accept_request(
     db.add(p2)
     db.commit()
     db.refresh(session)
+    if destination_from_model(session):
+        get_metrics().increment_counter("destination_sessions_started_total")
 
     requester = db.query(User).filter(User.id == req.requester_id).first()
     requester_name = _display_name(requester)

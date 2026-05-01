@@ -32,6 +32,7 @@ import * as ExpoLinking from 'expo-linking';
 import { useAuth } from '../context/AuthContext';
 import locationService from '../services/locationService';
 import realtimeService from '../services/realtimeService';
+import backgroundLocation from '../services/backgroundLocation';
 import client from '../api/client';
 import { authStorage } from '../api/authStorage';
 import analyticsService from '../services/analyticsService';
@@ -135,16 +136,27 @@ const ActiveSessionScreen = ({ route, navigation }) => {
   const [routeDuration, setRouteDuration] = useState(null);
   const [routeLoading, setRouteLoading] = useState(false);
   const routeFetchRef = useRef(null);
+  const [destinationRouteCoords, setDestinationRouteCoords] = useState(null);
+  const [destinationRouteDistance, setDestinationRouteDistance] = useState(null);
+  const [destinationRouteDuration, setDestinationRouteDuration] = useState(null);
+  const [peerDestinationRouteCoords, setPeerDestinationRouteCoords] = useState(null);
+  const [peerDestinationRouteDistance, setPeerDestinationRouteDistance] = useState(null);
+  const [peerDestinationRouteDuration, setPeerDestinationRouteDuration] = useState(null);
+  const [destinationRouteLoading, setDestinationRouteLoading] = useState(false);
+  const destinationRouteFetchRef = useRef(null);
 
   // Peer display name (passed from accept flow or friend param, or fetched from session)
   const [peerName, setPeerName] = useState(friend?.display_name || friend?.name || 'Peer');
+  const [destination, setDestination] = useState(friend?.destination || null);
   const distanceText = formatSessionDistance(routeDistance);
   const durationText = routeDuration != null ? formatDuration(routeDuration) : null;
 
   // Peer info
   const [peerLastSeenText, setPeerLastSeenText] = useState('Not yet connected');
   const [peerIsStale, setPeerIsStale] = useState(false);
+  const [peerMayBeDelayed, setPeerMayBeDelayed] = useState(false);
   const [sharingPausedText, setSharingPausedText] = useState('');
+  const [backgroundSharingText, setBackgroundSharingText] = useState('');
   const [appState, setAppState] = useState(AppState.currentState);
 
   // Refs for cleanup
@@ -248,15 +260,24 @@ const ActiveSessionScreen = ({ route, navigation }) => {
         return;
       }
 
-      if (nextState.match(/inactive|background/)) {
-        // Only set background text if not already manually paused
-        if (!isSharingPaused) {
-          setSharingPausedText('Sharing paused (app in background)');
-        }
-        
-        if (locationService.isTracking) {
-          locationService.pauseTracking('app_backgrounded');
-        }
+      if (nextState.match(/inactive|background/) && !isSharingPaused) {
+        backgroundLocation.isBackgroundSharingActive().then((active) => {
+          if (!isMountedRef.current) return;
+          if (active) {
+            setSharingPausedText('');
+            setBackgroundSharingText('Background sharing is on.');
+            if (locationService.isTracking) {
+              locationService.pauseTracking('app_backgrounded');
+            }
+            return;
+          }
+
+          setBackgroundSharingText('');
+          setSharingPausedText('Background sharing is off. Keep app open for live updates.');
+          if (locationService.isTracking) {
+            locationService.pauseTracking('app_backgrounded');
+          }
+        });
       }
     });
 
@@ -297,6 +318,15 @@ const ActiveSessionScreen = ({ route, navigation }) => {
           peer_id: friend?.id || null,
           peer_name: friend?.display_name || friend?.name || null,
         });
+
+        try {
+          const snapshotResponse = await client.get(`/sessions/${activeSessionId}/snapshot`);
+          if (snapshotResponse?.data?.destination) {
+            setDestination(snapshotResponse.data.destination);
+          }
+        } catch (_) {
+          // Destination is additive; location streaming can still start if snapshot fetch is unavailable.
+        }
 
         // Fetch peer display name if not provided via route params
         if ((!friend?.display_name && !friend?.name) && peerName === 'Peer') {
@@ -394,6 +424,12 @@ const ActiveSessionScreen = ({ route, navigation }) => {
 
         setSessionId(activeSessionId);
         sessionIdRef.current = activeSessionId;
+        const backgroundStart = await backgroundLocation.startBackgroundSharing(activeSessionId);
+        if (!backgroundStart.started) {
+          setBackgroundSharingText('Background sharing is off. Keep app open for live updates.');
+        } else {
+          setBackgroundSharingText('');
+        }
         DEBUG && console.log('[ActiveSessionScreen] WebSocket connected');
         analyticsService.track('session_launch_success', {
           elapsed_ms: Date.now() - sessionLaunchStartedAtRef.current,
@@ -531,6 +567,7 @@ const ActiveSessionScreen = ({ route, navigation }) => {
 
       if (payload.reason === 'PROXIMITY_REACHED' || payload.reason === 'MANUAL_CONFIRM') {
         if (arrivalTimerRef.current) clearInterval(arrivalTimerRef.current);
+        backgroundLocation.stopBackgroundSharing(sessionIdRef.current);
         clearActiveSessionHint();
         setIsConfirmingArrival(false);
         setMeetingSuccess(true);
@@ -550,6 +587,7 @@ const ActiveSessionScreen = ({ route, navigation }) => {
       }
 
       _cleanup();
+      backgroundLocation.stopBackgroundSharing(sessionIdRef.current);
       clearActiveSessionHint();
       Alert.alert('Meetup Ended', getSessionEndMessage(payload.reason), [
         {
@@ -673,9 +711,17 @@ const ActiveSessionScreen = ({ route, navigation }) => {
    */
   useEffect(() => {
     if (myLocation || peerLocation) {
-      injectMapData({ myLocation, peerLocation, routeCoords, peerName });
+      injectMapData({
+        myLocation,
+        peerLocation,
+        routeCoords,
+        peerName,
+        destination,
+        destinationRouteCoords,
+        peerDestinationRouteCoords,
+      });
     }
-  }, [myLocation, peerLocation, routeCoords, peerName, injectMapData]);
+  }, [myLocation, peerLocation, routeCoords, peerName, destination, destinationRouteCoords, peerDestinationRouteCoords, injectMapData]);
 
   /**
    * Fetch ORS route whenever both locations are known or mode changes
@@ -695,7 +741,15 @@ const ActiveSessionScreen = ({ route, navigation }) => {
         setRouteCoords(result.coordinates);
         setRouteDistance(result.distanceM);
         setRouteDuration(result.durationSec);
-        injectMapData({ myLocation, peerLocation, routeCoords: result.coordinates, peerName });
+        injectMapData({
+          myLocation,
+          peerLocation,
+          routeCoords: result.coordinates,
+          peerName,
+          destination,
+          destinationRouteCoords,
+          peerDestinationRouteCoords,
+        });
       } else {
         setRouteCoords(null);
         setRouteDistance(haversineDistance(myLocation, peerLocation));
@@ -705,7 +759,77 @@ const ActiveSessionScreen = ({ route, navigation }) => {
     }, 2000); // 2s debounce
 
     return () => clearTimeout(routeFetchRef.current);
-  }, [myLocation?.lat, myLocation?.lon, peerLocation?.lat, peerLocation?.lon, selectedMode]);
+  }, [myLocation?.lat, myLocation?.lon, peerLocation?.lat, peerLocation?.lon, selectedMode, destination]);
+
+  /**
+   * Fetch route guidance to the selected destination.
+   */
+  useEffect(() => {
+    if (!destination || !myLocation) {
+      setDestinationRouteCoords(null);
+      setDestinationRouteDistance(null);
+      setDestinationRouteDuration(null);
+      setPeerDestinationRouteCoords(null);
+      setPeerDestinationRouteDistance(null);
+      setPeerDestinationRouteDuration(null);
+      return;
+    }
+
+    selectedModeRef.current = selectedMode;
+    if (destinationRouteFetchRef.current) clearTimeout(destinationRouteFetchRef.current);
+
+    destinationRouteFetchRef.current = setTimeout(async () => {
+      const mode = selectedModeRef.current;
+      const destinationPoint = { lat: Number(destination.lat), lon: Number(destination.lon) };
+      setDestinationRouteLoading(true);
+
+      const [myRoute, friendRoute] = await Promise.all([
+        getRoute(myLocation, destinationPoint, mode),
+        peerLocation ? getRoute(peerLocation, destinationPoint, mode) : Promise.resolve(null),
+      ]);
+
+      if (myRoute) {
+        setDestinationRouteCoords(myRoute.coordinates);
+        setDestinationRouteDistance(myRoute.distanceM);
+        setDestinationRouteDuration(myRoute.durationSec);
+      } else {
+        setDestinationRouteCoords([[myLocation.lat, myLocation.lon], [destinationPoint.lat, destinationPoint.lon]]);
+        setDestinationRouteDistance(haversineDistance(myLocation, destinationPoint));
+        setDestinationRouteDuration(null);
+      }
+
+      if (friendRoute) {
+        setPeerDestinationRouteCoords(friendRoute.coordinates);
+        setPeerDestinationRouteDistance(friendRoute.distanceM);
+        setPeerDestinationRouteDuration(friendRoute.durationSec);
+      } else if (peerLocation) {
+        setPeerDestinationRouteCoords([[peerLocation.lat, peerLocation.lon], [destinationPoint.lat, destinationPoint.lon]]);
+        setPeerDestinationRouteDistance(haversineDistance(peerLocation, destinationPoint));
+        setPeerDestinationRouteDuration(null);
+      } else {
+        setPeerDestinationRouteCoords(null);
+        setPeerDestinationRouteDistance(null);
+        setPeerDestinationRouteDuration(null);
+      }
+
+      setDestinationRouteLoading(false);
+    }, 1800);
+
+    return () => clearTimeout(destinationRouteFetchRef.current);
+  }, [destination?.lat, destination?.lon, myLocation?.lat, myLocation?.lon, peerLocation?.lat, peerLocation?.lon, selectedMode]);
+
+  const destinationDistanceText = destinationRouteDistance != null
+    ? formatDistance(destinationRouteDistance)
+    : null;
+  const peerDestinationDistanceText = peerDestinationRouteDistance != null
+    ? formatDistance(peerDestinationRouteDistance)
+    : null;
+  const destinationEtaText = destinationRouteDuration != null
+    ? formatDuration(destinationRouteDuration)
+    : null;
+  const peerDestinationEtaText = peerDestinationRouteDuration != null
+    ? formatDuration(peerDestinationRouteDuration)
+    : null;
 
   /**
    * Once WebView is loaded, flush any pending location data
@@ -742,6 +866,7 @@ const ActiveSessionScreen = ({ route, navigation }) => {
 
       // Show warning if stale (>5 seconds)
       setPeerIsStale(diffSeconds > 5);
+      setPeerMayBeDelayed(diffSeconds > 60);
     }, 1000);
 
     return () => {
@@ -807,6 +932,7 @@ const ActiveSessionScreen = ({ route, navigation }) => {
               }
 
               clearActiveSessionHint();
+              backgroundLocation.stopBackgroundSharing(sessionId);
               _cleanup();
               navigation.reset({
                 index: 0,
@@ -944,6 +1070,7 @@ const ActiveSessionScreen = ({ route, navigation }) => {
     locationEventUnsubscribesRef.current = {};
 
     // Stop tracking
+    backgroundLocation.stopBackgroundSharing(sessionIdRef.current);
     locationService.stopTracking();
     if (locationUnsubscribeRef.current) {
       locationUnsubscribeRef.current();
@@ -1092,7 +1219,7 @@ const ActiveSessionScreen = ({ route, navigation }) => {
               maxZoom: 19
             }).addTo(map);
 
-            let myMarker, peerMarker, myLabel, peerLabel, myCircle, peerCircle, routeLine;
+            let myMarker, peerMarker, destinationMarker, myLabel, peerLabel, destinationLabel, myCircle, peerCircle, routeLine, destinationRouteLine, peerDestinationRouteLine;
             let firstFit = true;
 
             function makeLabel(text, kind) {
@@ -1115,8 +1242,17 @@ const ActiveSessionScreen = ({ route, navigation }) => {
               });
             }
 
+            function makeDestinationIcon() {
+              return L.divIcon({
+                className: 'label-icon',
+                html: '<div style="width:24px;height:24px;border-radius:14px;background:#ffffff;border:2px solid #17212f;box-shadow:0 4px 10px rgba(0,0,0,0.24);display:flex;align-items:center;justify-content:center;"><div style="width:8px;height:8px;border-radius:4px;background:#d13f2f;"></div></div>',
+                iconSize: [24, 24],
+                iconAnchor: [12, 12]
+              });
+            }
+
             window.updateMap = (data) => {
-              const { myLocation, peerLocation, routeCoords, peerName } = data;
+              const { myLocation, peerLocation, routeCoords, peerName, destination, destinationRouteCoords, peerDestinationRouteCoords } = data;
               const peer = peerName || 'Peer';
 
               if (myLocation) {
@@ -1150,10 +1286,33 @@ const ActiveSessionScreen = ({ route, navigation }) => {
                 else routeLine = L.polyline(routeCoords, { color: '${colors.routeLine}', weight: 3.5, opacity: 0.7, dashArray: '10 6' }).addTo(map);
               } else if (routeLine) { routeLine.remove(); routeLine = null; }
 
+              if (destinationRouteCoords && destinationRouteCoords.length > 1) {
+                if (destinationRouteLine) destinationRouteLine.setLatLngs(destinationRouteCoords);
+                else destinationRouteLine = L.polyline(destinationRouteCoords, { color: '${colors.myMarker}', weight: 4, opacity: 0.82 }).addTo(map);
+              } else if (destinationRouteLine) { destinationRouteLine.remove(); destinationRouteLine = null; }
+
+              if (peerDestinationRouteCoords && peerDestinationRouteCoords.length > 1) {
+                if (peerDestinationRouteLine) peerDestinationRouteLine.setLatLngs(peerDestinationRouteCoords);
+                else peerDestinationRouteLine = L.polyline(peerDestinationRouteCoords, { color: '${colors.peerMarker}', weight: 3.5, opacity: 0.62, dashArray: '8 6' }).addTo(map);
+              } else if (peerDestinationRouteLine) { peerDestinationRouteLine.remove(); peerDestinationRouteLine = null; }
+
+              if (destination) {
+                const { lat, lon, name } = destination;
+                if (destinationMarker) {
+                  destinationMarker.setLatLng([lat, lon]);
+                } else {
+                  destinationMarker = L.marker([lat, lon], { icon: makeDestinationIcon(), zIndexOffset: 900 }).addTo(map);
+                  destinationLabel = L.marker([lat, lon], { icon: makeLabel(name || 'Place', 'destination'), interactive: false, zIndexOffset: 1100 }).addTo(map);
+                }
+                if (destinationLabel) destinationLabel.setLatLng([lat, lon]);
+              }
+
               // Fit both markers on first load
               if (firstFit && myLocation && peerLocation) {
                 firstFit = false;
-                const bounds = L.latLngBounds([[myLocation.lat, myLocation.lon], [peerLocation.lat, peerLocation.lon]]);
+                const points = [[myLocation.lat, myLocation.lon], [peerLocation.lat, peerLocation.lon]];
+                if (destination) points.push([destination.lat, destination.lon]);
+                const bounds = L.latLngBounds(points);
                 map.fitBounds(bounds.pad(0.25));
               } else if (myLocation && !peerLocation) {
                 map.setView([myLocation.lat, myLocation.lon], 15);
@@ -1272,13 +1431,20 @@ const ActiveSessionScreen = ({ route, navigation }) => {
         </View>
       )}
 
+      {!!backgroundSharingText && !sharingPausedText && (
+        <View style={s.pauseBanner}>
+          <Text style={s.pauseText}>{backgroundSharingText}</Text>
+        </View>
+      )}
+
       {/* Bottom Panel */}
       <View style={s.bottomPanel}>
         <View style={s.infoRow}>
           <View style={s.peerInfo}>
             <Text style={s.peerName}>{peerName}</Text>
             <Text style={s.peerSub}>
-              {peerLocation ? `Last seen: ${peerLastSeenText}` : 'Waiting for location...'}
+              {peerLocation ? `Updated ${peerLastSeenText}` : 'Waiting for location...'}
+              {peerMayBeDelayed ? ' • May be delayed by OS power settings' : ''}
             </Text>
           </View>
           {routeDistance != null && (
@@ -1300,6 +1466,28 @@ const ActiveSessionScreen = ({ route, navigation }) => {
                 <Text style={s.statValue}>{durationText}</Text>
               </View>
             )}
+          </View>
+        )}
+
+        {!!destination && (
+          <View style={s.destinationCard}>
+            <View style={{ flex: 1 }}>
+              <Text style={s.destinationKicker}>MEET AT</Text>
+              <Text style={s.destinationName} numberOfLines={1}>{destination.name}</Text>
+              {!!destination.address && (
+                <Text style={s.destinationAddress} numberOfLines={1}>{destination.address}</Text>
+              )}
+              <View style={s.destinationStats}>
+                <Text style={s.destinationStatText}>You: {destinationDistanceText || '—'}</Text>
+                <Text style={s.destinationStatText}>Friend: {peerDestinationDistanceText || '—'}</Text>
+                <Text style={s.destinationStatText}>Your ETA: {destinationEtaText || '—'}</Text>
+                <Text style={s.destinationStatText}>Friend ETA: {peerDestinationEtaText || '—'}</Text>
+              </View>
+              <Text style={s.destinationRouteHint}>
+                {destinationRouteLoading ? 'Updating in-app route...' : destinationRouteDuration ? 'Route shown on map' : 'Direct line shown until route is available'}
+              </Text>
+              {peerMayBeDelayed && <Text style={s.destinationStaleText}>Friend last seen {peerLastSeenText}</Text>}
+            </View>
           </View>
         )}
 
@@ -1539,6 +1727,29 @@ const makeStyles = (c) => StyleSheet.create({
     gap: Spacing.sm,
     marginBottom: Spacing.md,
   },
+  destinationCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    backgroundColor: c.surfaceElevated,
+    borderWidth: 1,
+    borderColor: c.border,
+    borderRadius: Radius.md,
+    padding: 12,
+    marginBottom: Spacing.md,
+  },
+  destinationKicker: { color: c.textMuted, fontSize: 10, fontWeight: '900', marginBottom: 2 },
+  destinationName: { color: c.textPrimary, fontSize: 15, fontWeight: '900' },
+  destinationAddress: { color: c.textSecondary, fontSize: 11, marginTop: 2 },
+  destinationStats: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 7,
+  },
+  destinationStatText: { color: c.textSecondary, fontSize: 11, fontWeight: '700' },
+  destinationRouteHint: { color: c.textMuted, fontSize: 11, fontWeight: '700', marginTop: 7 },
+  destinationStaleText: { color: c.warning, fontSize: 11, fontWeight: '700', marginTop: 5 },
   controlButtons: {
     flexDirection: 'row',
     gap: Spacing.sm,

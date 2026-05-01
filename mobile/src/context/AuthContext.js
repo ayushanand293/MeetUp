@@ -6,6 +6,7 @@ import client from '../api/client';
 import { authStorage } from '../api/authStorage';
 import analyticsService from '../services/analyticsService';
 import { authEventEmitter } from '../api/client';
+import backgroundLocation from '../services/backgroundLocation';
 
 // Create the Auth Context
 const AuthContext = createContext({});
@@ -194,6 +195,7 @@ export const AuthProvider = ({ children }) => {
       setSessionInvalidatedElsewhere(true);
       setSession(null);
       setUser(null);
+      backgroundLocation.stopBackgroundSharing();
       authStorage.clearSession();
     };
 
@@ -208,6 +210,7 @@ export const AuthProvider = ({ children }) => {
   const signInWithPhone = async phone => {
     try {
       setLoading(true);
+      await backgroundLocation.stopBackgroundSharing();
       await authStorage.clearSession();
       setSession(null);
       setUser(null);

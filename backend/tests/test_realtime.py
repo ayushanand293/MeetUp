@@ -16,25 +16,6 @@ from app.realtime.connection_manager import ConnectionManager
 from app.realtime.schemas import EventType
 
 
-@pytest.fixture(autouse=True)
-def local_broadcast_transport(monkeypatch):
-    """Avoid Redis transport flakiness in unit tests; keep deterministic in-process fanout."""
-
-    async def _noop_subscribe(self, session_id):
-        return None
-
-    async def _noop_unsubscribe(self, session_id):
-        return None
-
-    async def _broadcast_local(self, session_id, message, exclude_user=None):
-        payload = json.dumps(message) if isinstance(message, dict) else message
-        exclude_user_str = str(exclude_user) if exclude_user else None
-        await self._forward_to_local_connections(session_id, payload, exclude_user=exclude_user_str)
-
-    monkeypatch.setattr(ConnectionManager, "_subscribe_to_session", _noop_subscribe)
-    monkeypatch.setattr(ConnectionManager, "_unsubscribe_from_session", _noop_unsubscribe)
-    monkeypatch.setattr(ConnectionManager, "broadcast", _broadcast_local)
-
 def _close_ws_safe(ws):
     try:
         ws.close()

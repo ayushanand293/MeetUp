@@ -2,8 +2,10 @@ import React, { useState, useRef, useEffect } from 'react';
 import {
     View, Text, TouchableOpacity, Alert,
     ActivityIndicator, Animated,
+    TextInput, ScrollView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import * as Location from 'expo-location';
 import { useAuth } from '../context/AuthContext';
 import client from '../api/client';
 import { useTheme, Spacing, Radius, Font, anim } from '../theme';
@@ -16,6 +18,12 @@ const RequestScreen = ({ route, navigation }) => {
     const [requestSent, setRequestSent] = useState(false);
     const [sentRequestId, setSentRequestId] = useState(null);
     const [activeSession, setActiveSession] = useState(null);
+    const [placeQuery, setPlaceQuery] = useState('');
+    const [placeResults, setPlaceResults] = useState([]);
+    const [selectedDestination, setSelectedDestination] = useState(null);
+    const [placeLoading, setPlaceLoading] = useState(false);
+    const [placeError, setPlaceError] = useState('');
+    const [deviceCoords, setDeviceCoords] = useState(null);
     const waitingPollRef = useRef(null);
     const outgoingPendingCountRef = useRef(0);
     const lastKnownOutgoingRequestIdRef = useRef(null);
@@ -40,6 +48,52 @@ const RequestScreen = ({ route, navigation }) => {
         };
         checkActiveSession();
     }, []);
+
+    useEffect(() => {
+        Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced })
+            .then((loc) => setDeviceCoords({
+                lat: loc.coords.latitude,
+                lon: loc.coords.longitude,
+            }))
+            .catch(() => {});
+    }, []);
+
+    useEffect(() => {
+        const q = placeQuery.trim();
+        if (q.length < 2) {
+            setPlaceResults([]);
+            setPlaceError('');
+            setPlaceLoading(false);
+            return;
+        }
+
+        let cancelled = false;
+        setPlaceLoading(true);
+        setPlaceError('');
+        const timer = setTimeout(async () => {
+            try {
+                const params = { q, limit: 10 };
+                if (deviceCoords) {
+                    params.lat = deviceCoords.lat;
+                    params.lon = deviceCoords.lon;
+                }
+                const res = await client.get('/places/search', { params });
+                if (!cancelled) setPlaceResults(res?.data || []);
+            } catch (_) {
+                if (!cancelled) {
+                    setPlaceResults([]);
+                    setPlaceError('Search failed — retry');
+                }
+            } finally {
+                if (!cancelled) setPlaceLoading(false);
+            }
+        }, 300);
+
+        return () => {
+            cancelled = true;
+            clearTimeout(timer);
+        };
+    }, [placeQuery, deviceCoords]);
 
     useEffect(() => {
         Animated.parallel([
@@ -156,7 +210,18 @@ const RequestScreen = ({ route, navigation }) => {
 
         setLoading(true);
         try {
-            const res = await client.post('/requests/', { to_user_id: friend.id });
+            const payload = { to_user_id: friend.id };
+            if (selectedDestination) {
+                payload.destination = {
+                    name: selectedDestination.name,
+                    address: selectedDestination.address,
+                    lat: selectedDestination.lat,
+                    lon: selectedDestination.lon,
+                    provider: selectedDestination.provider,
+                    place_id: selectedDestination.place_id,
+                };
+            }
+            const res = await client.post('/requests/', payload);
             if (res?.data?.id) {
                 setSentRequestId(res.data.id);
             }
@@ -188,6 +253,11 @@ const RequestScreen = ({ route, navigation }) => {
     const orbUp = ambient.interpolate({ inputRange: [0, 1], outputRange: [0, -10] });
     const orbDown = ambient.interpolate({ inputRange: [0, 1], outputRange: [0, 8] });
     const canSend = !activeSession?.session_id;
+    const placeHint = placeQuery.trim().length < 2
+        ? 'Type to search'
+        : placeLoading
+            ? 'Searching...'
+            : placeError || (placeResults.length === 0 ? 'No results' : '');
 
     return (
         <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }} edges={['top']}>
@@ -242,7 +312,11 @@ const RequestScreen = ({ route, navigation }) => {
                 </View>
             )}
 
-            <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: Spacing.lg }}>
+            <ScrollView
+                style={{ flex: 1 }}
+                contentContainerStyle={{ flexGrow: 1, justifyContent: 'center', alignItems: 'center', padding: Spacing.lg }}
+                keyboardShouldPersistTaps="handled"
+            >
             <Animated.View style={{
                 width: '100%',
                 backgroundColor: colors.surface,
@@ -273,10 +347,79 @@ const RequestScreen = ({ route, navigation }) => {
                 <View style={{ height: 1, backgroundColor: colors.border, width: '100%', marginVertical: Spacing.lg }} />
 
                 {!requestSent ? (
-                    <Text style={[Font.body, { color: colors.textSecondary, textAlign: 'center', lineHeight: 22, marginBottom: Spacing.xl }]}> 
-                        This person will receive your meet request.{"\n"}
-                        They have <Text style={{ color: colors.textPrimary, fontWeight: '700' }}>10 minutes</Text> to accept.
-                    </Text>
+                    <>
+                        <Text style={[Font.body, { color: colors.textSecondary, textAlign: 'center', lineHeight: 22, marginBottom: Spacing.lg }]}>
+                            This person will receive your meet request.{"\n"}
+                            They have <Text style={{ color: colors.textPrimary, fontWeight: '700' }}>10 minutes</Text> to accept.
+                        </Text>
+
+                        <View style={{ width: '100%', marginBottom: Spacing.xl }}>
+                            <Text style={[Font.subtitle, { color: colors.textPrimary, fontSize: 14, marginBottom: 6 }]}>Meeting place (optional)</Text>
+                            {selectedDestination ? (
+                                <View style={{
+                                    borderWidth: 1,
+                                    borderColor: colors.border,
+                                    backgroundColor: colors.surfaceElevated,
+                                    borderRadius: Radius.md,
+                                    padding: 12,
+                                }}>
+                                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                        <View style={{ flex: 1 }}>
+                                            <Text style={{ color: colors.textPrimary, fontWeight: '800', fontSize: 14 }} numberOfLines={1}>{selectedDestination.name}</Text>
+                                            {!!selectedDestination.address && (
+                                                <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 3 }} numberOfLines={1}>{selectedDestination.address}</Text>
+                                            )}
+                                        </View>
+                                        <TouchableOpacity onPress={() => setSelectedDestination(null)} style={{ paddingLeft: 10, paddingVertical: 6 }}>
+                                            <Text style={{ color: colors.textMuted, fontWeight: '800' }}>Clear</Text>
+                                        </TouchableOpacity>
+                                    </View>
+                                </View>
+                            ) : (
+                                <>
+                                    <TextInput
+                                        style={{
+                                            borderWidth: 1,
+                                            borderColor: colors.border,
+                                            borderRadius: Radius.md,
+                                            backgroundColor: colors.surfaceElevated,
+                                            color: colors.textPrimary,
+                                            paddingHorizontal: 12,
+                                            paddingVertical: 12,
+                                        }}
+                                        placeholder="Search restaurants, cafes..."
+                                        placeholderTextColor={colors.textMuted}
+                                        value={placeQuery}
+                                        onChangeText={setPlaceQuery}
+                                        autoCorrect={false}
+                                    />
+                                    {!!placeHint && (
+                                        <Text style={{ color: placeError ? colors.accent : colors.textMuted, fontSize: 12, marginTop: 8 }}>{placeHint}</Text>
+                                    )}
+                                    {placeResults.slice(0, 5).map((place) => (
+                                        <TouchableOpacity
+                                            key={`${place.provider}:${place.place_id || place.name}`}
+                                            onPress={() => {
+                                                setSelectedDestination(place);
+                                                setPlaceQuery('');
+                                                setPlaceResults([]);
+                                            }}
+                                            style={{
+                                                paddingVertical: 10,
+                                                borderBottomWidth: 1,
+                                                borderBottomColor: colors.borderLight,
+                                            }}
+                                        >
+                                            <Text style={{ color: colors.textPrimary, fontWeight: '700', fontSize: 13 }} numberOfLines={1}>{place.name}</Text>
+                                            {!!place.address && (
+                                                <Text style={{ color: colors.textSecondary, fontSize: 11, marginTop: 2 }} numberOfLines={1}>{place.address}</Text>
+                                            )}
+                                        </TouchableOpacity>
+                                    ))}
+                                </>
+                            )}
+                        </View>
+                    </>
                 ) : (
                     <View style={{
                         width: '100%',
@@ -326,7 +469,7 @@ const RequestScreen = ({ route, navigation }) => {
                     <Text style={{ color: colors.textMuted, fontSize: 14 }}>Cancel</Text>
                 </TouchableOpacity>
             </Animated.View>
-            </View>
+            </ScrollView>
         </SafeAreaView>
     );
 };

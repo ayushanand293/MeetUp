@@ -1,35 +1,38 @@
 """Redis connection pool and utilities."""
 
+import asyncio
 import redis.asyncio as redis
 
 from app.core.config import settings
 
-_redis_client: redis.Redis | None = None
+_redis_clients: dict[int, redis.Redis] = {}
 
 
 async def get_redis() -> redis.Redis:
     """Get or create Redis connection."""
-    global _redis_client
-    if _redis_client is None:
-        _redis_client = await redis.from_url(settings.REDIS_URL, decode_responses=True)
+    loop_id = id(asyncio.get_running_loop())
+    redis_client = _redis_clients.get(loop_id)
+    if redis_client is None:
+        redis_client = await redis.from_url(settings.REDIS_URL, decode_responses=True)
+        _redis_clients[loop_id] = redis_client
     else:
         try:
-            await _redis_client.ping()
+            await redis_client.ping()
         except Exception:
             try:
-                await _redis_client.aclose()
+                await redis_client.aclose()
             except Exception:
                 pass
-            _redis_client = await redis.from_url(settings.REDIS_URL, decode_responses=True)
-    return _redis_client
+            redis_client = await redis.from_url(settings.REDIS_URL, decode_responses=True)
+            _redis_clients[loop_id] = redis_client
+    return redis_client
 
 
 async def close_redis() -> None:
     """Close Redis connection."""
-    global _redis_client
-    if _redis_client:
-        await _redis_client.aclose()
-        _redis_client = None
+    for redis_client in list(_redis_clients.values()):
+        await redis_client.aclose()
+    _redis_clients.clear()
 
 
 class RedisClient:

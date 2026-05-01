@@ -14,9 +14,22 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.anonymous.mobile"
+      "bundleIdentifier": "com.anonymous.mobile",
+      "infoPlist": {
+        "UIBackgroundModes": ["location"],
+        "NSLocationWhenInUseUsageDescription": "MeetUp uses your location during an active meetup so your friend can see where you are.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "MeetUp can keep sharing your location in the background only while an active meetup is in progress.",
+        "NSLocationAlwaysUsageDescription": "MeetUp can keep sharing your location in the background only while an active meetup is in progress."
+      }
     },
     "android": {
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_LOCATION"
+      ],
       "adaptiveIcon": {
         "foregroundImage": "./assets/Meet up logo.png",
         "backgroundColor": "#ffffff"
@@ -24,6 +37,18 @@
       "edgeToEdgeEnabled": true,
       "package": "com.anonymous.mobile"
     },
+    "plugins": [
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "MeetUp can keep sharing your location in the background only while an active meetup is in progress.",
+          "locationWhenInUsePermission": "MeetUp uses your location during an active meetup so your friend can see where you are.",
+          "isIosBackgroundLocationEnabled": true,
+          "isAndroidBackgroundLocationEnabled": true,
+          "isAndroidForegroundServiceEnabled": true
+        }
+      ]
+    ],
     "web": {
       "favicon": "./assets/Meet up logo.png"
     }

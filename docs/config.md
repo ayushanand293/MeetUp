@@ -65,9 +65,32 @@ The MeetUp mobile client requires a few environment variables to function correc
 - **Prod Behavior:** If omitted in a production build, the app will throw a fatal error on launch: `CRITICAL: EXPO_PUBLIC_API_BASE_URL is not set for production build.`
 
 ### `EXPO_PUBLIC_CLIENT_LOCATION_FOREGROUND_ONLY`
-- **Description:** Whether to only track location while the app is foregrounded. True saves battery and uses simpler permission flow.
+- **Description:** Legacy kill switch for foreground-only location behavior.
 - **Required:** No
 - **Default:** `true`
+- **Current app behavior:** Active meetup sessions now attempt best-effort background sharing through Expo background location. If the OS denies background permission or power settings throttle the app, MeetUp degrades to foreground-only behavior and shows a non-blocking banner.
+
+## Mobile Background Location Configuration
+
+The Expo mobile app must include background location capabilities for production builds.
+
+### iOS
+- `UIBackgroundModes` includes `location`.
+- `NSLocationWhenInUseUsageDescription` explains active-session foreground sharing.
+- `NSLocationAlwaysAndWhenInUseUsageDescription` explains active-session background sharing.
+- `NSLocationAlwaysUsageDescription` is included for older iOS compatibility.
+
+### Android
+The app declares:
+- `ACCESS_FINE_LOCATION`
+- `ACCESS_COARSE_LOCATION`
+- `ACCESS_BACKGROUND_LOCATION`
+- `FOREGROUND_SERVICE`
+- `FOREGROUND_SERVICE_LOCATION`
+
+The `expo-location` config plugin enables iOS background location, Android background location, and Android foreground service support. Android shows a foreground service notification while background sharing is active.
+
+Background sharing is only started from `ActiveSessionScreen` after an active session is resolved and permissions are granted. It stops on session end, force end, token invalidation, logout, or active session cleanup.
 
 ### `EXPO_PUBLIC_CLIENT_ANALYTICS_ENABLED`
 - **Description:** Toggle analytics tracking.

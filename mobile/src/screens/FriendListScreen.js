@@ -215,22 +215,13 @@ const FriendListScreen = ({ navigation }) => {
     return unmatched.filter(item => item.name.toLowerCase().includes(q) || item.phone.includes(q) || item.displayPhone.includes(q));
   }, [unmatched, query]);
 
-  const handleMatchedMeet = async item => {
-    try {
-      setBusyContact(item.key);
-      const res = await client.post('/requests/', { to_user_id: item.userId });
-      navigation.navigate('Request', {
-        friend: {
-          id: item.userId,
-          display_name: item.appName || item.name,
-          requestId: res?.data?.id,
-        },
-      });
-    } catch (error) {
-      Alert.alert('Could not send request', error?.response?.data?.detail || 'Please try again.');
-    } finally {
-      setBusyContact('');
-    }
+  const handleMatchedMeet = item => {
+    navigation.navigate('Request', {
+      friend: {
+        id: item.userId,
+        display_name: item.appName || item.name,
+      },
+    });
   };
 
   const handleUnmatchedInvite = async item => {

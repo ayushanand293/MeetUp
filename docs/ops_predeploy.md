@@ -28,3 +28,23 @@ To verify migration state from a clean state:
    ```bash
    docker compose exec db psql -U postgres -d meetup -c "\dt"
    ```
+
+## Background Location Readiness
+
+Before shipping a mobile build that supports active-session background sharing:
+
+1. Confirm `mobile/app.json` includes the `expo-location` plugin with iOS and Android background location enabled.
+2. Confirm iOS permission strings clearly state location is shared only during an active meetup.
+3. Confirm Android build includes the foreground service notification:
+   - Title: `MeetUp is sharing your location`
+   - Body: `Active meetup in progress`
+4. Run backend protection tests:
+   ```bash
+   docker compose exec -T backend pytest -q tests/test_background_location.py
+   ```
+5. Run mobile lint:
+   ```bash
+   cd mobile
+   npm run lint
+   ```
+6. Complete `docs/qa_background_location.md` on both iOS and Android physical devices. Simulators are useful for smoke checks but do not fully represent OS background throttling.

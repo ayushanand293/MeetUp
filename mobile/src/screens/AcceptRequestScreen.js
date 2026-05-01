@@ -337,6 +337,26 @@ const RequestCard = ({ item, index, colors, accepting, onAccept, onDecline, link
                 )}
                 {item.expires_at && <ExpiryBadge expiresAt={item.expires_at} colors={colors} />}
             </View>
+            {!!item.destination && (
+                <View style={{
+                    borderWidth: 1,
+                    borderColor: colors.borderLight,
+                    backgroundColor: colors.surfaceElevated,
+                    borderRadius: Radius.md,
+                    padding: 10,
+                    marginBottom: Spacing.md,
+                }}>
+                    <Text style={{ color: colors.textMuted, fontSize: 11, fontWeight: '800', marginBottom: 3 }}>MEET AT</Text>
+                    <Text style={{ color: colors.textPrimary, fontWeight: '800', fontSize: 14 }} numberOfLines={1}>
+                        {item.destination.name}
+                    </Text>
+                    {!!item.destination.address && (
+                        <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 3 }} numberOfLines={1}>
+                            {item.destination.address}
+                        </Text>
+                    )}
+                </View>
+            )}
             <View style={{ flexDirection: 'row', gap: 8 }}>
                 <TouchableOpacity style={{ flex: 1, borderWidth: 1, borderColor: colors.border, borderRadius: Radius.md, paddingVertical: 12, alignItems: 'center' }} onPress={onDecline}>
                     <Text style={{ color: colors.textMuted, fontWeight: '600', fontSize: 14 }}>Decline</Text>
