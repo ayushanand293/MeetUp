@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef } from 'react';
 import { AccessibilityInfo, Animated, Easing, Image, StyleSheet, Text, View } from 'react-native';
 import * as Haptics from 'expo-haptics';
 
-const LOGO_SOURCE = require('../../assets/Meet up logo.png');
+const LOGO_SOURCE = require('../../assets/meetup-logo-cropped.png');
 
 const AnimatedLaunchScreen = ({ onComplete, duration = 2100, backgroundColor = '#F6F6F6' }) => {
   const containerOpacity = useRef(new Animated.Value(1)).current;
@@ -392,15 +392,16 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255, 255, 255, 0.56)',
   },
   card: {
-    width: 250,
-    height: 250,
-    borderRadius: 36,
+    width: 220,
+    height: 220,
+    borderRadius: 44,
     backgroundColor: 'rgba(255, 255, 255, 0.76)',
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.92)',
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',
+    padding: 30,
     shadowColor: '#000',
     shadowOpacity: 0.12,
     shadowRadius: 24,
@@ -415,8 +416,8 @@ const styles = StyleSheet.create({
     transform: [{ rotateZ: '24deg' }],
   },
   logo: {
-    width: 184,
-    height: 184,
+    width: 140,
+    height: 140,
   },
   textWrap: {
     marginTop: 28,

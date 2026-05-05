@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo, useCallback } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const THEME_KEY = '@meetup_theme';
@@ -82,17 +82,17 @@ export const ThemeProvider = ({ children }) => {
         }).catch(() => setReady(true));
     }, []);
 
-    const toggle = async () => {
+    const toggle = useCallback(async () => {
         const next = !isDark;
         setIsDark(next);
         await AsyncStorage.setItem(THEME_KEY, next ? 'dark' : 'light');
-    };
+    }, [isDark]);
 
     const value = useMemo(() => ({
         isDark,
         colors: isDark ? darkColors : lightColors,
         toggle,
-    }), [isDark]);
+    }), [isDark, toggle]);
 
     if (!ready) return null;
     return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;

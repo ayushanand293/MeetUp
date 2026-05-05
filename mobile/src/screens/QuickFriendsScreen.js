@@ -1,7 +1,74 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { View, Text, TouchableOpacity, ScrollView } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, Animated, TouchableWithoutFeedback } from 'react-native';
 import client from '../api/client';
-import { useTheme, Spacing, Radius, Font } from '../theme';
+import { useTheme, Spacing, Radius, Font, anim } from '../theme';
+
+const QuickFriendRow = ({ friend, index, handleMeetAgain, colors }) => {
+    const scale = React.useRef(new Animated.Value(1)).current;
+    const opacity = React.useRef(new Animated.Value(0)).current;
+    const translateY = React.useRef(new Animated.Value(15)).current;
+    
+    React.useEffect(() => {
+        Animated.parallel([
+            Animated.timing(opacity, { toValue: 1, duration: 300, delay: Math.min(index, 12) * 50, useNativeDriver: true }),
+            Animated.timing(translateY, { toValue: 0, duration: 300, delay: Math.min(index, 12) * 50, useNativeDriver: true }),
+        ]).start();
+    }, []);
+
+    return (
+        <Animated.View style={{ opacity, transform: [{ scale }, { translateY }] }}>
+            <TouchableWithoutFeedback onPressIn={() => anim.pressIn(scale)} onPressOut={() => anim.pressOut(scale)}>
+                <View style={{
+                    backgroundColor: colors.surface,
+                    borderWidth: 1,
+                    borderColor: colors.border,
+                    borderRadius: Radius.lg,
+                    padding: Spacing.md,
+                    marginBottom: Spacing.sm,
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    shadowColor: colors.textPrimary,
+                    shadowOpacity: 0.05,
+                    shadowOffset: { width: 0, height: 4 },
+                    shadowRadius: 8,
+                    elevation: 2,
+                }}>
+                    <View style={{
+                        width: 46,
+                        height: 46,
+                        borderRadius: 23,
+                        backgroundColor: colors.surfaceElevated,
+                        borderWidth: 1,
+                        borderColor: colors.border,
+                        justifyContent: 'center',
+                        alignItems: 'center',
+                        marginRight: 14,
+                    }}>
+                        <Text style={{ color: colors.textPrimary, fontSize: 18, fontWeight: '800' }}>
+                            {(friend.co_participant_name || '?')[0].toUpperCase()}
+                        </Text>
+                    </View>
+                    <View style={{ flex: 1 }}>
+                        <Text style={[Font.subtitle, { color: colors.textPrimary, fontSize: 16 }]} numberOfLines={1}>{friend.co_participant_name}</Text>
+                        <Text style={[Font.caption, { color: colors.textMuted, marginTop: 2 }]}>Last met {formatTimeAgo(friend.ended_at)} • {friend.meetup_count || 1} meetups</Text>
+                    </View>
+                    <TouchableOpacity
+                        onPress={() => handleMeetAgain(friend)}
+                        style={{
+                            borderWidth: 1,
+                            borderColor: colors.textPrimary,
+                            backgroundColor: colors.textPrimary,
+                            borderRadius: Radius.pill,
+                            paddingHorizontal: 14,
+                            paddingVertical: 8,
+                        }}>
+                        <Text style={{ color: colors.bg, fontSize: 13, fontWeight: '800' }}>Meet Again</Text>
+                    </TouchableOpacity>
+                </View>
+            </TouchableWithoutFeedback>
+        </Animated.View>
+    );
+};
 
 const formatTimeAgo = (endedAt) => {
     if (!endedAt) return 'Recently';
@@ -100,63 +167,25 @@ const QuickFriendsScreen = ({ navigation }) => {
             <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: Spacing.xxl }}>
                 {quickFriends.length === 0 && (
                     <View style={{
-                        backgroundColor: colors.surface,
-                        borderWidth: 1,
-                        borderColor: colors.border,
-                        borderRadius: Radius.md,
-                        padding: Spacing.md,
-                        marginBottom: Spacing.sm,
+                        flex: 1,
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        paddingVertical: Spacing.xxl,
                     }}>
-                        <Text style={[Font.subtitle, { color: colors.textPrimary, marginBottom: 4 }]}>No quick friends yet</Text>
-                        <Text style={[Font.caption, { color: colors.textMuted }]}>Complete a meetup first and they will appear here.</Text>
+                        <Text style={{ fontSize: 52, color: colors.textMuted, marginBottom: Spacing.md }}>◎</Text>
+                        <Text style={[Font.subtitle, { color: colors.textPrimary, marginBottom: 6 }]}>No quick friends yet</Text>
+                        <Text style={[Font.body, { color: colors.textSecondary }]}>Complete a meetup to see history.</Text>
                     </View>
                 )}
 
-                {quickFriends.map((friend) => (
-                    <View
+                {quickFriends.map((friend, index) => (
+                    <QuickFriendRow
                         key={friend.co_participant_id || `${friend.co_participant_name}-${friend.session_id}`}
-                        style={{
-                            backgroundColor: colors.surface,
-                            borderWidth: 1,
-                            borderColor: colors.border,
-                            borderRadius: Radius.md,
-                            padding: Spacing.md,
-                            marginBottom: Spacing.sm,
-                        }}>
-                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                            <View style={{
-                                width: 42,
-                                height: 42,
-                                borderRadius: 21,
-                                backgroundColor: colors.surfaceElevated,
-                                borderWidth: 1,
-                                borderColor: colors.border,
-                                justifyContent: 'center',
-                                alignItems: 'center',
-                                marginRight: Spacing.sm,
-                            }}>
-                                <Text style={{ color: colors.textPrimary, fontSize: 17, fontWeight: '800' }}>
-                                    {(friend.co_participant_name || '?')[0].toUpperCase()}
-                                </Text>
-                            </View>
-                            <View style={{ flex: 1 }}>
-                                <Text style={[Font.subtitle, { color: colors.textPrimary, fontSize: 16 }]}>{friend.co_participant_name}</Text>
-                                <Text style={[Font.caption, { color: colors.textMuted, marginTop: 2 }]}>Last met {formatTimeAgo(friend.ended_at)} • {friend.meetup_count || 1} meetups</Text>
-                            </View>
-                            <TouchableOpacity
-                                onPress={() => handleMeetAgain(friend)}
-                                style={{
-                                    borderWidth: 1,
-                                    borderColor: colors.textPrimary,
-                                    backgroundColor: colors.textPrimary,
-                                    borderRadius: Radius.pill,
-                                    paddingHorizontal: 12,
-                                    paddingVertical: 8,
-                                }}>
-                                <Text style={{ color: colors.bg, fontSize: 12, fontWeight: '800' }}>Meet Again</Text>
-                            </TouchableOpacity>
-                        </View>
-                    </View>
+                        friend={friend}
+                        index={index}
+                        colors={colors}
+                        handleMeetAgain={handleMeetAgain}
+                    />
                 ))}
             </ScrollView>
         </View>

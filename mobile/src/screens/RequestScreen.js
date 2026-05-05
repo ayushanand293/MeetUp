@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import {
     View, Text, TouchableOpacity, Alert,
     ActivityIndicator, Animated,
-    TextInput, ScrollView,
+    TextInput, ScrollView, KeyboardAvoidingView, Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Location from 'expo-location';
@@ -32,7 +32,6 @@ const RequestScreen = ({ route, navigation }) => {
     const cardOp = useRef(new Animated.Value(0)).current;
     const ringScale = useRef(new Animated.Value(0.8)).current;
     const btnScale = useRef(new Animated.Value(1)).current;
-    const ambient = useRef(new Animated.Value(0)).current;
 
     // Check for active session on mount
     useEffect(() => {
@@ -102,17 +101,6 @@ const RequestScreen = ({ route, navigation }) => {
             Animated.spring(ringScale, { toValue: 1, useNativeDriver: true, tension: 40, delay: 200 }),
         ]).start();
     }, []);
-
-    useEffect(() => {
-        const loop = Animated.loop(
-            Animated.sequence([
-                Animated.timing(ambient, { toValue: 1, duration: 2600, useNativeDriver: true }),
-                Animated.timing(ambient, { toValue: 0, duration: 2600, useNativeDriver: true }),
-            ])
-        );
-        loop.start();
-        return () => loop.stop();
-    }, [ambient]);
 
     useEffect(() => {
         if (!requestSent) return;
@@ -250,46 +238,14 @@ const RequestScreen = ({ route, navigation }) => {
     };
 
     const initials = (friend?.display_name || '?')[0].toUpperCase();
-    const orbUp = ambient.interpolate({ inputRange: [0, 1], outputRange: [0, -10] });
-    const orbDown = ambient.interpolate({ inputRange: [0, 1], outputRange: [0, 8] });
-    const canSend = !activeSession?.session_id;
     const placeHint = placeQuery.trim().length < 2
-        ? 'Type to search'
+        ? 'Search nearby cafes, parks, restaurants, or stations.'
         : placeLoading
             ? 'Searching...'
             : placeError || (placeResults.length === 0 ? 'No results' : '');
 
     return (
         <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }} edges={['top']}>
-            <Animated.View
-                pointerEvents="none"
-                style={{
-                    position: 'absolute',
-                    width: 240,
-                    height: 240,
-                    borderRadius: 120,
-                    top: -90,
-                    right: -70,
-                    backgroundColor: colors.surfaceElevated,
-                    opacity: 0.52,
-                    transform: [{ translateY: orbUp }],
-                }}
-            />
-            <Animated.View
-                pointerEvents="none"
-                style={{
-                    position: 'absolute',
-                    width: 180,
-                    height: 180,
-                    borderRadius: 90,
-                    bottom: 120,
-                    left: -60,
-                    backgroundColor: colors.surfaceGlass,
-                    opacity: 0.36,
-                    transform: [{ translateY: orbDown }],
-                }}
-            />
-
             {/* Warning banner if in active session */}
             {activeSession?.session_id && (
                 <View style={{
@@ -312,19 +268,23 @@ const RequestScreen = ({ route, navigation }) => {
                 </View>
             )}
 
+            <KeyboardAvoidingView
+                style={{ flex: 1 }}
+                behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            >
             <ScrollView
                 style={{ flex: 1 }}
-                contentContainerStyle={{ flexGrow: 1, justifyContent: 'center', alignItems: 'center', padding: Spacing.lg }}
+                contentContainerStyle={{ flexGrow: 1, padding: Spacing.lg, paddingTop: Spacing.xl }}
                 keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
             >
             <Animated.View style={{
                 width: '100%',
                 backgroundColor: colors.surface,
-                borderRadius: Radius.xl,
-                padding: Spacing.xl,
+                borderRadius: Radius.lg,
+                padding: Spacing.lg,
                 borderWidth: 1,
                 borderColor: colors.border,
-                alignItems: 'center',
                 opacity: cardOp,
                 transform: [{ translateY: cardY }],
                 shadowColor: colors.textPrimary,
@@ -335,87 +295,127 @@ const RequestScreen = ({ route, navigation }) => {
             }}>
 
                 {/* Avatar */}
-                <View style={{ position: 'relative', marginBottom: Spacing.lg }}>
-                    <View style={{ width: 80, height: 80, borderRadius: 40, backgroundColor: colors.surfaceElevated, borderWidth: 2, borderColor: colors.border, justifyContent: 'center', alignItems: 'center' }}>
-                        <Text style={{ color: colors.textPrimary, fontWeight: '700', fontSize: 32 }}>{initials}</Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: Spacing.lg }}>
+                    <View style={{ position: 'relative', marginRight: 14 }}>
+                        <View style={{ width: 62, height: 62, borderRadius: 31, backgroundColor: colors.surfaceElevated, borderWidth: 1, borderColor: colors.border, justifyContent: 'center', alignItems: 'center' }}>
+                            <Text style={{ color: colors.textPrimary, fontWeight: '800', fontSize: 24 }}>{initials}</Text>
+                        </View>
+                        <Animated.View style={{ position: 'absolute', top: -4, left: -4, width: 70, height: 70, borderRadius: 35, borderWidth: 1, borderColor: colors.border, borderStyle: 'dashed', transform: [{ scale: ringScale }] }} />
                     </View>
-                    <Animated.View style={{ position: 'absolute', top: -4, left: -4, width: 88, height: 88, borderRadius: 44, borderWidth: 1, borderColor: colors.border, borderStyle: 'dashed', transform: [{ scale: ringScale }] }} />
+                    <View style={{ flex: 1 }}>
+                        <Text style={[Font.label, { color: colors.textMuted, marginBottom: 4 }]}>Meet Request</Text>
+                        <Text style={[Font.title, { color: colors.textPrimary }]} numberOfLines={1}>{friend?.display_name || 'Unknown'}</Text>
+                        <Text style={[Font.caption, { color: colors.textSecondary, marginTop: 5 }]}>
+                            Expires in 10 minutes if they do not accept.
+                        </Text>
+                    </View>
                 </View>
-
-                <Text style={[Font.title, { color: colors.textPrimary, textAlign: 'center', marginBottom: 4 }]}>{friend?.display_name || 'Unknown'}</Text>
 
                 <View style={{ height: 1, backgroundColor: colors.border, width: '100%', marginVertical: Spacing.lg }} />
 
                 {!requestSent ? (
                     <>
-                        <Text style={[Font.body, { color: colors.textSecondary, textAlign: 'center', lineHeight: 22, marginBottom: Spacing.lg }]}>
-                            This person will receive your meet request.{"\n"}
-                            They have <Text style={{ color: colors.textPrimary, fontWeight: '700' }}>10 minutes</Text> to accept.
-                        </Text>
-
                         <View style={{ width: '100%', marginBottom: Spacing.xl }}>
-                            <Text style={[Font.subtitle, { color: colors.textPrimary, fontSize: 14, marginBottom: 6 }]}>Meeting place (optional)</Text>
+                            <View style={{ flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 8 }}>
+                                <View>
+                                    <Text style={[Font.subtitle, { color: colors.textPrimary, fontSize: 16 }]}>Meeting place</Text>
+                                    <Text style={[Font.caption, { color: colors.textMuted, marginTop: 3 }]}>Optional destination for both routes</Text>
+                                </View>
+                                <Text style={{ color: colors.textMuted, fontSize: 12, fontWeight: '800' }}>OPTIONAL</Text>
+                            </View>
                             {selectedDestination ? (
                                 <View style={{
                                     borderWidth: 1,
                                     borderColor: colors.border,
                                     backgroundColor: colors.surfaceElevated,
                                     borderRadius: Radius.md,
-                                    padding: 12,
+                                    padding: 14,
                                 }}>
                                     <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                        <View style={{ width: 34, height: 34, borderRadius: 17, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center', marginRight: 10 }}>
+                                            <Text style={{ color: colors.textPrimary, fontWeight: '900', fontSize: 16 }}>⌖</Text>
+                                        </View>
                                         <View style={{ flex: 1 }}>
                                             <Text style={{ color: colors.textPrimary, fontWeight: '800', fontSize: 14 }} numberOfLines={1}>{selectedDestination.name}</Text>
                                             {!!selectedDestination.address && (
-                                                <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 3 }} numberOfLines={1}>{selectedDestination.address}</Text>
+                                                <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 4, lineHeight: 16 }} numberOfLines={2}>{selectedDestination.address}</Text>
                                             )}
                                         </View>
-                                        <TouchableOpacity onPress={() => setSelectedDestination(null)} style={{ paddingLeft: 10, paddingVertical: 6 }}>
-                                            <Text style={{ color: colors.textMuted, fontWeight: '800' }}>Clear</Text>
+                                        <TouchableOpacity onPress={() => setSelectedDestination(null)} style={{ paddingLeft: 10, paddingVertical: 8 }}>
+                                            <Text style={{ color: colors.textMuted, fontWeight: '900', fontSize: 13 }}>Change</Text>
                                         </TouchableOpacity>
                                     </View>
                                 </View>
                             ) : (
                                 <>
-                                    <TextInput
-                                        style={{
+                                    <View style={{
+                                        flexDirection: 'row',
+                                        alignItems: 'center',
+                                        borderWidth: 1,
+                                        borderColor: colors.border,
+                                        borderRadius: Radius.md,
+                                        backgroundColor: colors.surfaceElevated,
+                                        paddingHorizontal: 12,
+                                    }}>
+                                        <Text style={{ color: colors.textMuted, fontWeight: '900', fontSize: 16, marginRight: 8 }}>⌕</Text>
+                                        <TextInput
+                                            style={{
+                                                flex: 1,
+                                                color: colors.textPrimary,
+                                                paddingVertical: 13,
+                                                fontSize: 15,
+                                            }}
+                                            placeholder="Search restaurants, cafes..."
+                                            placeholderTextColor={colors.textMuted}
+                                            value={placeQuery}
+                                            onChangeText={setPlaceQuery}
+                                            autoCorrect={false}
+                                            returnKeyType="search"
+                                        />
+                                        {placeLoading && <ActivityIndicator size="small" color={colors.textSecondary} />}
+                                    </View>
+                                    {!!placeHint && (
+                                        <Text style={{ color: placeError ? colors.accent : colors.textMuted, fontSize: 12, marginTop: 8, fontWeight: '600' }}>{placeHint}</Text>
+                                    )}
+                                    {placeResults.length > 0 && (
+                                        <View style={{
+                                            marginTop: 10,
                                             borderWidth: 1,
                                             borderColor: colors.border,
                                             borderRadius: Radius.md,
                                             backgroundColor: colors.surfaceElevated,
-                                            color: colors.textPrimary,
-                                            paddingHorizontal: 12,
-                                            paddingVertical: 12,
-                                        }}
-                                        placeholder="Search restaurants, cafes..."
-                                        placeholderTextColor={colors.textMuted}
-                                        value={placeQuery}
-                                        onChangeText={setPlaceQuery}
-                                        autoCorrect={false}
-                                    />
-                                    {!!placeHint && (
-                                        <Text style={{ color: placeError ? colors.accent : colors.textMuted, fontSize: 12, marginTop: 8 }}>{placeHint}</Text>
+                                            overflow: 'hidden',
+                                        }}>
+                                            {placeResults.slice(0, 5).map((place, index) => (
+                                                <TouchableOpacity
+                                                    key={`${place.provider}:${place.place_id || place.name}`}
+                                                    onPress={() => {
+                                                        setSelectedDestination(place);
+                                                        setPlaceQuery('');
+                                                        setPlaceResults([]);
+                                                    }}
+                                                    style={{
+                                                        paddingVertical: 12,
+                                                        paddingHorizontal: 12,
+                                                        borderBottomWidth: index === Math.min(placeResults.length, 5) - 1 ? 0 : 1,
+                                                        borderBottomColor: colors.borderLight,
+                                                        flexDirection: 'row',
+                                                        alignItems: 'center',
+                                                    }}
+                                                >
+                                                    <View style={{ width: 26, height: 26, borderRadius: 13, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center', marginRight: 10 }}>
+                                                        <Text style={{ color: colors.textSecondary, fontWeight: '900', fontSize: 12 }}>⌖</Text>
+                                                    </View>
+                                                    <View style={{ flex: 1 }}>
+                                                        <Text style={{ color: colors.textPrimary, fontWeight: '800', fontSize: 13 }} numberOfLines={1}>{place.name}</Text>
+                                                        {!!place.address && (
+                                                            <Text style={{ color: colors.textSecondary, fontSize: 11, marginTop: 3 }} numberOfLines={1}>{place.address}</Text>
+                                                        )}
+                                                    </View>
+                                                </TouchableOpacity>
+                                            ))}
+                                        </View>
                                     )}
-                                    {placeResults.slice(0, 5).map((place) => (
-                                        <TouchableOpacity
-                                            key={`${place.provider}:${place.place_id || place.name}`}
-                                            onPress={() => {
-                                                setSelectedDestination(place);
-                                                setPlaceQuery('');
-                                                setPlaceResults([]);
-                                            }}
-                                            style={{
-                                                paddingVertical: 10,
-                                                borderBottomWidth: 1,
-                                                borderBottomColor: colors.borderLight,
-                                            }}
-                                        >
-                                            <Text style={{ color: colors.textPrimary, fontWeight: '700', fontSize: 13 }} numberOfLines={1}>{place.name}</Text>
-                                            {!!place.address && (
-                                                <Text style={{ color: colors.textSecondary, fontSize: 11, marginTop: 2 }} numberOfLines={1}>{place.address}</Text>
-                                            )}
-                                        </TouchableOpacity>
-                                    ))}
                                 </>
                             )}
                         </View>
@@ -430,16 +430,22 @@ const RequestScreen = ({ route, navigation }) => {
                         padding: 12,
                         marginBottom: Spacing.xl,
                     }}>
-                        <Text style={{ color: colors.textPrimary, fontWeight: '800', fontSize: 13 }}>Request sent successfully</Text>
-                        <Text style={{ color: colors.textSecondary, marginTop: 4, fontSize: 12 }}>Waiting for acceptance. This screen will auto-open the live session instantly.</Text>
+                        <Text style={{ color: colors.textPrimary, fontWeight: '800', fontSize: 14 }}>Request sent</Text>
+                        <Text style={{ color: colors.textSecondary, marginTop: 5, fontSize: 12, lineHeight: 17 }}>Waiting for acceptance. The live session opens automatically when they accept.</Text>
                     </View>
                 )}
 
                 <Animated.View style={{ transform: [{ scale: btnScale }], width: '100%' }}>
-                    <TouchableOpacity
-                        style={{
+                    <TouchableWithoutFeedback
+                        onPressIn={() => anim.pressIn(btnScale)} onPressOut={() => anim.pressOut(btnScale)}
+                        onPress={requestSent ? () => navigation.navigate('Home', {
+                            watchOutgoingRequestId: sentRequestId,
+                            watchOutgoingAcceptance: true,
+                        }) : handleSend}
+                        disabled={loading || Boolean(activeSession?.session_id)}>
+                        <View style={{
                             backgroundColor: activeSession?.session_id ? colors.textMuted : colors.textPrimary,
-                            borderRadius: Radius.md,
+                            borderRadius: Radius.pill,
                             paddingVertical: 15,
                             alignItems: 'center',
                             width: '100%',
@@ -450,19 +456,14 @@ const RequestScreen = ({ route, navigation }) => {
                             shadowRadius: 12,
                             elevation: 3,
                             opacity: (loading || activeSession?.session_id) ? 0.6 : 1,
-                        }}
-                        onPressIn={() => anim.pressIn(btnScale)} onPressOut={() => anim.pressOut(btnScale)}
-                        onPress={requestSent ? () => navigation.navigate('Home', {
-                            watchOutgoingRequestId: sentRequestId,
-                            watchOutgoingAcceptance: true,
-                        }) : handleSend}
-                        disabled={loading || Boolean(activeSession?.session_id)}>
-                        {loading ? <ActivityIndicator color={colors.bg} /> : (
-                            <Text style={{ color: colors.bg, fontSize: 15, fontWeight: '700' }}>
-                                {requestSent ? 'Go To Home' : activeSession?.session_id ? 'End Session To Request' : 'Send Meet Request'}
-                            </Text>
-                        )}
-                    </TouchableOpacity>
+                        }}>
+                            {loading ? <ActivityIndicator color={colors.bg} /> : (
+                                <Text style={{ color: colors.bg, fontSize: 15, fontWeight: '700' }}>
+                                    {requestSent ? 'Go To Home' : activeSession?.session_id ? 'End Session To Request' : 'Send Meet Request'}
+                                </Text>
+                            )}
+                        </View>
+                    </TouchableWithoutFeedback>
                 </Animated.View>
 
                 <TouchableOpacity style={{ paddingVertical: 12, alignItems: 'center', width: '100%' }} onPress={() => navigation.goBack()}>
@@ -470,6 +471,7 @@ const RequestScreen = ({ route, navigation }) => {
                 </TouchableOpacity>
             </Animated.View>
             </ScrollView>
+            </KeyboardAvoidingView>
         </SafeAreaView>
     );
 };

@@ -24,6 +24,7 @@ import {
   Animated,
   Share,
   Linking,
+  ScrollView,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { AppState } from 'react-native';
@@ -1179,19 +1180,11 @@ const ActiveSessionScreen = ({ route, navigation }) => {
               height: 14px;
               border-radius: 7px;
               border: 2px solid #ffffff;
-              box-shadow: 0 0 0 2px var(--marker-color), 0 3px 8px rgba(0, 0, 0, 0.25);
-              background: var(--marker-color);
-            }
-            .peer-marker {
-              width: 14px;
-              height: 14px;
-              border-radius: 7px;
-              border: 2px solid #ffffff;
-              box-shadow: 0 0 0 2px var(--marker-color), 0 3px 8px rgba(0, 0, 0, 0.25);
+              box-shadow: 0 0 0 2px var(--marker-color), 0 3px 8px rgba(0, 0, 0, 0.35);
               background: var(--marker-color);
               position: relative;
             }
-            .peer-marker::after {
+            .user-marker::after {
               content: '';
               position: absolute;
               width: 26px;
@@ -1200,12 +1193,37 @@ const ActiveSessionScreen = ({ route, navigation }) => {
               top: -8px;
               border-radius: 13px;
               border: 1.5px solid var(--marker-color);
-              opacity: 0.28;
+              opacity: 0.15;
+              animation: userPulse 3s infinite ease-out;
+            }
+            .peer-marker {
+              width: 14px;
+              height: 14px;
+              border-radius: 7px;
+              border: 2px solid #ffffff;
+              box-shadow: 0 0 0 2px var(--marker-color), 0 3px 8px rgba(0, 0, 0, 0.35);
+              background: var(--marker-color);
+              position: relative;
+            }
+            .peer-marker::after {
+              content: '';
+              position: absolute;
+              width: 32px;
+              height: 32px;
+              left: -11px;
+              top: -11px;
+              border-radius: 16px;
+              background: var(--marker-color);
+              opacity: 0.25;
               animation: peerPulse 2.2s infinite ease-out;
             }
+            @keyframes userPulse {
+              0% { transform: scale(0.8); opacity: 0.2; }
+              100% { transform: scale(1.6); opacity: 0; }
+            }
             @keyframes peerPulse {
-              0% { transform: scale(0.95); opacity: 0.35; }
-              100% { transform: scale(1.35); opacity: 0; }
+              0% { transform: scale(0.6); opacity: 0.4; }
+              100% { transform: scale(1.4); opacity: 0; }
             }
           </style>
         </head>
@@ -1245,7 +1263,7 @@ const ActiveSessionScreen = ({ route, navigation }) => {
             function makeDestinationIcon() {
               return L.divIcon({
                 className: 'label-icon',
-                html: '<div style="width:24px;height:24px;border-radius:14px;background:#ffffff;border:2px solid #17212f;box-shadow:0 4px 10px rgba(0,0,0,0.24);display:flex;align-items:center;justify-content:center;"><div style="width:8px;height:8px;border-radius:4px;background:#d13f2f;"></div></div>',
+                html: '<div style="width:24px;height:24px;border-radius:14px;background:#ffffff;border:2px solid #17212f;box-shadow:0 4px 10px rgba(0,0,0,0.24);display:flex;align-items:center;justify-content:center;"><div style="width:8px;height:8px;border-radius:4px;background:#17212f;"></div></div>',
                 iconSize: [24, 24],
                 iconAnchor: [12, 12]
               });
@@ -1439,6 +1457,11 @@ const ActiveSessionScreen = ({ route, navigation }) => {
 
       {/* Bottom Panel */}
       <View style={s.bottomPanel}>
+        <ScrollView
+          showsVerticalScrollIndicator={false}
+          bounces={false}
+          contentContainerStyle={s.bottomPanelContent}
+        >
         <View style={s.infoRow}>
           <View style={s.peerInfo}>
             <Text style={s.peerName}>{peerName}</Text>
@@ -1471,23 +1494,39 @@ const ActiveSessionScreen = ({ route, navigation }) => {
 
         {!!destination && (
           <View style={s.destinationCard}>
-            <View style={{ flex: 1 }}>
-              <Text style={s.destinationKicker}>MEET AT</Text>
-              <Text style={s.destinationName} numberOfLines={1}>{destination.name}</Text>
-              {!!destination.address && (
-                <Text style={s.destinationAddress} numberOfLines={1}>{destination.address}</Text>
-              )}
-              <View style={s.destinationStats}>
-                <Text style={s.destinationStatText}>You: {destinationDistanceText || '—'}</Text>
-                <Text style={s.destinationStatText}>Friend: {peerDestinationDistanceText || '—'}</Text>
-                <Text style={s.destinationStatText}>Your ETA: {destinationEtaText || '—'}</Text>
-                <Text style={s.destinationStatText}>Friend ETA: {peerDestinationEtaText || '—'}</Text>
+            <View style={s.destinationHeader}>
+              <View style={s.destinationPin}>
+                <Text style={s.destinationPinText}>⌖</Text>
               </View>
-              <Text style={s.destinationRouteHint}>
-                {destinationRouteLoading ? 'Updating in-app route...' : destinationRouteDuration ? 'Route shown on map' : 'Direct line shown until route is available'}
-              </Text>
-              {peerMayBeDelayed && <Text style={s.destinationStaleText}>Friend last seen {peerLastSeenText}</Text>}
+              <View style={{ flex: 1 }}>
+                <Text style={s.destinationKicker}>MEET AT</Text>
+                <Text style={s.destinationName} numberOfLines={1}>{destination.name}</Text>
+                {!!destination.address && (
+                  <Text style={s.destinationAddress} numberOfLines={2}>{destination.address}</Text>
+                )}
+              </View>
             </View>
+
+            <View style={s.destinationStats}>
+              <DestinationMetric label="You" distance={destinationDistanceText} eta={destinationEtaText} colors={colors} />
+              <DestinationMetric label={peerName} distance={peerDestinationDistanceText} eta={peerDestinationEtaText} colors={colors} muted={!peerLocation} />
+            </View>
+
+            <View style={s.routeLegend}>
+              <View style={s.routeLegendItem}>
+                <View style={[s.routeSample, s.routeSampleSolid]} />
+                <Text style={s.routeLegendText}>Your route</Text>
+              </View>
+              <View style={s.routeLegendItem}>
+                <View style={[s.routeSample, s.routeSampleDashed]} />
+                <Text style={s.routeLegendText}>Friend route</Text>
+              </View>
+            </View>
+
+            <Text style={s.destinationRouteHint}>
+              {destinationRouteLoading ? 'Updating routes...' : destinationRouteDuration ? 'Routes shown on map' : 'Direct line shown until routing is available'}
+            </Text>
+            {peerMayBeDelayed && <Text style={s.destinationStaleText}>Friend last seen {peerLastSeenText}</Text>}
           </View>
         )}
 
@@ -1496,15 +1535,15 @@ const ActiveSessionScreen = ({ route, navigation }) => {
             style={[s.controlButton, isSharingPaused && s.controlButtonActive]}
             onPress={handleTogglePauseSharing}
           >
-            <Text style={s.controlButtonIcon}>{isSharingPaused ? '▶️' : '⏸️'}</Text>
+            <Text style={s.controlButtonIcon}>{isSharingPaused ? '▶' : 'Ⅱ'}</Text>
             <Text style={[s.controlButtonLabel, isSharingPaused && s.controlButtonLabelActive]}>
-              {isSharingPaused ? 'Resume Sharing' : 'Pause Sharing'}
+              {isSharingPaused ? 'Resume' : 'Pause'}
             </Text>
           </TouchableOpacity>
 
           <TouchableOpacity style={s.controlButton} onPress={handleEndSession}>
-            <Text style={s.controlButtonIcon}>🛑</Text>
-            <Text style={s.controlButtonLabel}>Stop Sharing</Text>
+            <Text style={s.controlButtonIcon}>×</Text>
+            <Text style={s.controlButtonLabel}>End</Text>
           </TouchableOpacity>
         </View>
 
@@ -1539,6 +1578,7 @@ const ActiveSessionScreen = ({ route, navigation }) => {
             <Text style={s.imHereText}>I'm Here!</Text>
           </TouchableOpacity>
         )}
+        </ScrollView>
       </View>
 
       {/* Recovery Modal - appears on top of active session when there's a permission/service/network issue */}
@@ -1581,7 +1621,7 @@ const ActiveSessionScreen = ({ route, navigation }) => {
       <Modal visible={isConfirmingArrival} transparent animationType="fade">
         <View style={s.modalOverlay}>
           <View style={s.modalCard}>
-            <ActivityIndicator size="large" color={colors.primary} style={{ marginBottom: 16 }} />
+            <ActivityIndicator size="large" color={colors.textPrimary} style={{ marginBottom: 16 }} />
             <Text style={s.modalTitle}>Waiting for peer...</Text>
             <Text style={s.modalText}>They have {arrivalCountdown}s to confirm</Text>
             <TouchableOpacity style={s.cancelButton} onPress={() => {
@@ -1631,11 +1671,11 @@ const makeStyles = (c) => StyleSheet.create({
     shadowRadius: 18,
     elevation: 5,
   },
-  initIssueTitle: { ...Font.h3, color: c.textPrimary, marginBottom: 8 },
+  initIssueTitle: { ...Font.subtitle, color: c.textPrimary, marginBottom: 8 },
   initIssueText: { ...Font.body, color: c.textSecondary, marginBottom: Spacing.md, lineHeight: 22 },
   initIssuePrimaryButton: {
     backgroundColor: c.textPrimary,
-    borderRadius: Radius.md,
+    borderRadius: Radius.pill,
     paddingVertical: 14,
     alignItems: 'center',
     marginBottom: 10,
@@ -1645,7 +1685,7 @@ const makeStyles = (c) => StyleSheet.create({
     backgroundColor: c.surfaceElevated,
     borderWidth: 1,
     borderColor: c.border,
-    borderRadius: Radius.md,
+    borderRadius: Radius.pill,
     paddingVertical: 14,
     alignItems: 'center',
     marginBottom: 10,
@@ -1708,15 +1748,21 @@ const makeStyles = (c) => StyleSheet.create({
   },
 
   bottomPanel: {
+    position: 'absolute',
+    bottom: 32, left: 16, right: 16,
     backgroundColor: c.surface,
-    borderTopLeftRadius: Radius.xl, borderTopRightRadius: Radius.xl,
+    borderRadius: Radius.xl,
     paddingHorizontal: Spacing.lg, paddingTop: Spacing.md, paddingBottom: Spacing.lg,
-    borderTopWidth: 1, borderColor: c.border,
+    maxHeight: '60%',
+    borderWidth: 1, borderColor: c.border,
     shadowColor: c.textPrimary,
-    shadowOffset: { width: 0, height: -3 },
-    shadowOpacity: 0.08,
-    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.12,
+    shadowRadius: 24,
     elevation: 10,
+  },
+  bottomPanelContent: {
+    paddingBottom: 2,
   },
   infoRow: { flexDirection: 'row', alignItems: 'center', marginBottom: Spacing.md },
   peerInfo: { flex: 1 },
@@ -1728,9 +1774,6 @@ const makeStyles = (c) => StyleSheet.create({
     marginBottom: Spacing.md,
   },
   destinationCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.sm,
     backgroundColor: c.surfaceElevated,
     borderWidth: 1,
     borderColor: c.border,
@@ -1738,17 +1781,66 @@ const makeStyles = (c) => StyleSheet.create({
     padding: 12,
     marginBottom: Spacing.md,
   },
+  destinationHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  destinationPin: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: c.surface,
+    borderWidth: 1,
+    borderColor: c.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+  },
+  destinationPinText: {
+    color: c.textPrimary,
+    fontSize: 16,
+    fontWeight: '900',
+  },
   destinationKicker: { color: c.textMuted, fontSize: 10, fontWeight: '900', marginBottom: 2 },
   destinationName: { color: c.textPrimary, fontSize: 15, fontWeight: '900' },
-  destinationAddress: { color: c.textSecondary, fontSize: 11, marginTop: 2 },
+  destinationAddress: { color: c.textSecondary, fontSize: 11, marginTop: 2, lineHeight: 15 },
   destinationStats: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
-    marginTop: 7,
   },
-  destinationStatText: { color: c.textSecondary, fontSize: 11, fontWeight: '700' },
-  destinationRouteHint: { color: c.textMuted, fontSize: 11, fontWeight: '700', marginTop: 7 },
+  routeLegend: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 10,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: c.border,
+  },
+  routeLegendItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  routeSample: {
+    width: 24,
+    height: 0,
+    borderTopWidth: 3,
+    marginRight: 6,
+  },
+  routeSampleSolid: {
+    borderTopColor: c.myMarker,
+  },
+  routeSampleDashed: {
+    borderTopColor: c.peerMarker,
+    borderStyle: 'dashed',
+  },
+  routeLegendText: {
+    color: c.textSecondary,
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  destinationRouteHint: { color: c.textMuted, fontSize: 11, fontWeight: '700', marginTop: 8 },
   destinationStaleText: { color: c.warning, fontSize: 11, fontWeight: '700', marginTop: 5 },
   controlButtons: {
     flexDirection: 'row',
@@ -1763,7 +1855,7 @@ const makeStyles = (c) => StyleSheet.create({
     backgroundColor: c.surfaceElevated,
     borderWidth: 1,
     borderColor: c.border,
-    borderRadius: Radius.md,
+    borderRadius: Radius.pill,
     paddingVertical: 12,
     paddingHorizontal: 10,
   },
@@ -1809,27 +1901,27 @@ const makeStyles = (c) => StyleSheet.create({
 
   modeTabs: {
     flexDirection: 'row', marginBottom: Spacing.md,
-    backgroundColor: c.surfaceElevated, borderRadius: Radius.md, padding: 3,
+    backgroundColor: c.surfaceElevated, borderRadius: Radius.pill, padding: 4,
     borderWidth: 1, borderColor: c.border,
   },
   modeTab: {
     flex: 1, flexDirection: 'row', alignItems: 'center',
-    justifyContent: 'center', paddingVertical: 8, borderRadius: Radius.sm,
+    justifyContent: 'center', paddingVertical: 8, borderRadius: Radius.pill,
   },
-  modeTabActive: { backgroundColor: c.borderLight },
+  modeTabActive: { backgroundColor: c.textPrimary },
   modeIcon: { fontSize: 14, marginRight: 5 },
   modeLabel: { ...Font.caption, color: c.textMuted },
-  modeLabelActive: { color: c.textPrimary, fontWeight: '700' },
+  modeLabelActive: { color: c.bg, fontWeight: '800' },
 
   mapLoading: {
     ...StyleSheet.absoluteFillObject, justifyContent: 'center',
     alignItems: 'center', backgroundColor: c.bg,
   },
   imHereButton: {
-    backgroundColor: c.primary,
-    borderRadius: Radius.md, paddingVertical: 14,
+    backgroundColor: c.textPrimary,
+    borderRadius: Radius.pill, paddingVertical: 14,
     alignItems: 'center', justifyContent: 'center',
-    marginBottom: Spacing.sm, shadowColor: c.primary,
+    marginBottom: Spacing.sm, shadowColor: c.textPrimary,
     shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8, elevation: 4,
   },
   imHereText: { color: c.bg, fontSize: 16, fontWeight: '800' },
@@ -1837,7 +1929,7 @@ const makeStyles = (c) => StyleSheet.create({
     backgroundColor: c.surfaceElevated,
     borderWidth: 1,
     borderColor: c.border,
-    borderRadius: Radius.md,
+    borderRadius: Radius.pill,
     paddingVertical: 14,
     alignItems: 'center',
     justifyContent: 'center',
@@ -1846,22 +1938,46 @@ const makeStyles = (c) => StyleSheet.create({
   shareInviteText: { color: c.textPrimary, fontSize: 15, fontWeight: '700', letterSpacing: 0.2 },
   endSessionButton: {
     borderWidth: 1, borderColor: c.accent,
-    borderRadius: Radius.md, paddingVertical: 14,
+    borderRadius: Radius.pill, paddingVertical: 14,
     alignItems: 'center', justifyContent: 'center',
   },
   buttonDisabled: { opacity: 0.5 },
   endSessionText: { color: c.accent, fontSize: 15, fontWeight: '700', letterSpacing: 0.3 },
   
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center' },
-  modalCard: { backgroundColor: c.surface, padding: 24, borderRadius: Radius.lg, width: '80%', alignItems: 'center' },
-  modalTitle: { ...Font.h3, color: c.textPrimary, marginBottom: 8 },
-  modalText: { ...Font.body, color: c.textSecondary, marginBottom: 24 },
-  cancelButton: { paddingVertical: 12, paddingHorizontal: 24, borderRadius: Radius.md, backgroundColor: c.borderLight },
-  cancelText: { color: c.textPrimary, fontWeight: '600' },
-  successCard: { backgroundColor: c.successBg || '#E6F4EA', padding: 32, borderRadius: Radius.xl, alignItems: 'center', borderWidth: 2, borderColor: c.success || '#34A853' },
+  modalCard: { backgroundColor: c.surface, padding: 32, borderRadius: Radius.xl, width: '80%', alignItems: 'center', borderWidth: 1, borderColor: c.border, shadowColor: c.textPrimary, shadowOpacity: 0.1, shadowOffset: { width: 0, height: 10 }, shadowRadius: 20, elevation: 10 },
+  modalTitle: { ...Font.subtitle, color: c.textPrimary, marginBottom: 8 },
+  modalText: { ...Font.body, color: c.textSecondary, marginBottom: 24, textAlign: 'center' },
+  cancelButton: { paddingVertical: 14, paddingHorizontal: 32, borderRadius: Radius.pill, backgroundColor: c.surfaceElevated, borderWidth: 1, borderColor: c.border },
+  cancelText: { color: c.textPrimary, fontWeight: '800' },
+  successCard: { backgroundColor: c.successBg, padding: 32, borderRadius: Radius.xl, alignItems: 'center', borderWidth: 2, borderColor: c.textPrimary },
   successEmoji: { fontSize: 64, marginBottom: 16 },
-  successTitle: { fontSize: 24, fontWeight: '800', color: c.success || '#34A853', marginBottom: 8 },
+  successTitle: { fontSize: 24, fontWeight: '800', color: c.textPrimary, marginBottom: 8 },
   successText: { fontSize: 16, color: c.textSecondary, fontWeight: '500' },
 });
+
+const DestinationMetric = ({ label, distance, eta, colors, muted }) => (
+  <View style={{
+    flex: 1,
+    minWidth: 120,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: Radius.sm,
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    opacity: muted ? 0.65 : 1,
+  }}>
+    <Text style={{ color: colors.textMuted, fontSize: 10, fontWeight: '900', marginBottom: 4 }} numberOfLines={1}>
+      {label}
+    </Text>
+    <Text style={{ color: colors.textPrimary, fontSize: 15, fontWeight: '900' }}>
+      {distance || 'Waiting'}
+    </Text>
+    <Text style={{ color: colors.textSecondary, fontSize: 11, fontWeight: '700', marginTop: 2 }}>
+      {eta || 'ETA pending'}
+    </Text>
+  </View>
+);
 
 export default ActiveSessionScreen;

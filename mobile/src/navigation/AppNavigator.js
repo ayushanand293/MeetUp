@@ -229,9 +229,9 @@ const LoadingScreen = ({ isAuthReady, onFinished }) => {
           transform: [{ scale: cardScale }, { translateY: logoFloat }],
           opacity: cardOpacity,
         }}>
-        <View style={[styles.loadingLogoWrap, { backgroundColor: colors.surface, borderColor: colors.border }]}> 
+        <View style={[styles.loadingLogoWrap, { backgroundColor: '#FFFFFF', borderColor: colors.border }]}> 
           <Animated.View style={[styles.loadingShimmer, { transform: [{ translateX: shimmerX }] }]} />
-          <Image source={require('../../assets/Meet up logo.png')} style={styles.loadingLogo} resizeMode="contain" />
+          <Image source={require('../../assets/meetup-logo-cropped.png')} style={styles.loadingLogo} resizeMode="contain" />
         </View>
       </Animated.View>
 
@@ -313,13 +313,14 @@ const styles = StyleSheet.create({
     opacity: 0.3,
   },
   loadingLogoWrap: {
-    width: 176,
-    height: 176,
-    borderRadius: 30,
+    width: 160,
+    height: 160,
+    borderRadius: 36,
     borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',
+    padding: 20,
     shadowColor: '#000',
     shadowOpacity: 0.12,
     shadowOffset: { width: 0, height: 14 },
@@ -334,8 +335,8 @@ const styles = StyleSheet.create({
     transform: [{ rotateZ: '24deg' }],
   },
   loadingLogo: {
-    width: 126,
-    height: 126,
+    width: 110,
+    height: 110,
   },
   loadingTitle: {
     marginTop: 22,

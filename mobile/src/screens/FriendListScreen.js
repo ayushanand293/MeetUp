@@ -8,6 +8,8 @@ import {
   Alert,
   ActivityIndicator,
   Share,
+  Animated,
+  TouchableWithoutFeedback,
 } from 'react-native';
 import * as Contacts from 'expo-contacts';
 import * as Crypto from 'expo-crypto';
@@ -15,7 +17,7 @@ import * as Linking from 'expo-linking';
 
 import client from '../api/client';
 import { useAuth } from '../context/AuthContext';
-import { useTheme, Spacing, Radius, Font } from '../theme';
+import { useTheme, Spacing, Radius, Font, anim } from '../theme';
 
 const normalizePhoneE164 = input => {
   if (!input) return '';
@@ -51,44 +53,81 @@ const digestPhone = async (version, phone) => {
   );
 };
 
-const ContactRow = ({ item, colors, actionLabel, onPress }) => (
-  <TouchableOpacity
-    style={{
-      flexDirection: 'row',
-      alignItems: 'center',
-      backgroundColor: colors.surface,
-      borderRadius: Radius.md,
-      padding: Spacing.md,
-      marginBottom: Spacing.sm,
-      borderWidth: 1,
-      borderColor: colors.border,
-    }}
-    onPress={onPress}>
-    <View
-      style={{
-        width: 42,
-        height: 42,
-        borderRadius: 21,
-        backgroundColor: colors.surfaceElevated,
-        borderWidth: 1,
-        borderColor: colors.border,
-        justifyContent: 'center',
-        alignItems: 'center',
-        marginRight: 12,
-      }}>
-      <Text style={{ color: colors.textPrimary, fontWeight: '700', fontSize: 16 }}>
-        {(item.name || '?')[0].toUpperCase()}
-      </Text>
-    </View>
+const ContactRow = ({ item, colors, actionLabel, onPress, index = 0 }) => {
+  const scale = React.useRef(new Animated.Value(1)).current;
+  const opacity = React.useRef(new Animated.Value(0)).current;
+  const translateY = React.useRef(new Animated.Value(15)).current;
+  
+  React.useEffect(() => {
+    Animated.parallel([
+      Animated.timing(opacity, { toValue: 1, duration: 300, delay: Math.min(index, 20) * 40, useNativeDriver: true }),
+      Animated.timing(translateY, { toValue: 0, duration: 300, delay: Math.min(index, 20) * 40, useNativeDriver: true }),
+    ]).start();
+  }, []);
+  
+  return (
+    <Animated.View style={{ opacity, transform: [{ scale }, { translateY }] }}>
+      <TouchableWithoutFeedback
+        onPressIn={() => anim.pressIn(scale)}
+        onPressOut={() => anim.pressOut(scale)}
+        onPress={onPress}>
+        <View style={{
+          flexDirection: 'row',
+          alignItems: 'center',
+          backgroundColor: colors.surface,
+          borderRadius: Radius.lg,
+          padding: Spacing.md,
+          marginBottom: Spacing.sm,
+          borderWidth: 1,
+          borderColor: colors.border,
+          shadowColor: colors.textPrimary,
+          shadowOpacity: 0.05,
+          shadowOffset: { width: 0, height: 4 },
+          shadowRadius: 8,
+          elevation: 2,
+        }}>
+          <View style={{
+            width: 46,
+            height: 46,
+            borderRadius: 23,
+            backgroundColor: colors.surfaceElevated,
+            borderWidth: 1,
+            borderColor: colors.border,
+            justifyContent: 'center',
+            alignItems: 'center',
+            marginRight: 14,
+          }}>
+            <Text style={{ color: colors.textPrimary, fontWeight: '800', fontSize: 18 }}>
+              {(item.name || '?')[0].toUpperCase()}
+            </Text>
+          </View>
 
-    <View style={{ flex: 1 }}>
-      <Text style={[Font.subtitle, { color: colors.textPrimary, fontSize: 15 }]}>{item.name}</Text>
-      <Text style={[Font.caption, { color: colors.textMuted, marginTop: 2 }]}>{item.phone}</Text>
-    </View>
+          <View style={{ flex: 1 }}>
+            <Text style={[Font.subtitle, { color: colors.textPrimary, fontSize: 16 }]} numberOfLines={1}>{item.name}</Text>
+            <Text style={[Font.caption, { color: colors.textMuted, marginTop: 2 }]}>{item.phone}</Text>
+          </View>
 
-    <Text style={{ color: colors.textPrimary, fontWeight: '800' }}>{actionLabel}</Text>
-  </TouchableOpacity>
-);
+          <View style={{
+            backgroundColor: actionLabel === '...' ? colors.surfaceElevated : colors.textPrimary,
+            paddingHorizontal: 14,
+            paddingVertical: 8,
+            borderRadius: Radius.pill,
+            borderWidth: 1,
+            borderColor: actionLabel === '...' ? colors.border : colors.textPrimary,
+          }}>
+            <Text style={{ 
+              color: actionLabel === '...' ? colors.textMuted : colors.bg, 
+              fontWeight: '800', 
+              fontSize: 13 
+            }}>
+              {actionLabel}
+            </Text>
+          </View>
+        </View>
+      </TouchableWithoutFeedback>
+    </Animated.View>
+  );
+};
 
 const FriendListScreen = ({ navigation }) => {
   const { colors } = useTheme();
@@ -249,23 +288,31 @@ const FriendListScreen = ({ navigation }) => {
       <Text style={[Font.title, { color: colors.textPrimary }]}>Find Friends</Text>
       <Text style={[Font.body, { color: colors.textSecondary, marginTop: 4 }]}>Contacts are matched using local SHA256 digests. Raw phone numbers are not uploaded.</Text>
 
-      <TextInput
-        style={{
-          marginTop: Spacing.md,
-          marginBottom: Spacing.md,
-          borderWidth: 1,
-          borderColor: colors.border,
-          borderRadius: Radius.md,
-          backgroundColor: colors.surface,
-          color: colors.textPrimary,
-          paddingHorizontal: 12,
-          paddingVertical: 12,
-        }}
-        placeholder="Search contacts"
-        placeholderTextColor={colors.textMuted}
-        value={query}
-        onChangeText={setQuery}
-      />
+      <View style={{
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginTop: Spacing.md,
+        marginBottom: Spacing.md,
+        borderWidth: 1,
+        borderColor: colors.border,
+        borderRadius: Radius.pill,
+        backgroundColor: colors.surfaceElevated,
+        paddingHorizontal: 16,
+      }}>
+        <Text style={{ color: colors.textMuted, fontWeight: '900', fontSize: 16, marginRight: 8 }}>⌕</Text>
+        <TextInput
+          style={{
+            flex: 1,
+            color: colors.textPrimary,
+            paddingVertical: 14,
+            fontSize: 15,
+          }}
+          placeholder="Search contacts"
+          placeholderTextColor={colors.textMuted}
+          value={query}
+          onChangeText={setQuery}
+        />
+      </View>
 
       {loading ? (
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
@@ -285,9 +332,10 @@ const FriendListScreen = ({ navigation }) => {
               {item.items.length === 0 ? (
                 <Text style={[Font.caption, { color: colors.textMuted }]}>No contacts</Text>
               ) : (
-                item.items.map(contact => (
+                item.items.map((contact, index) => (
                   <View key={contact.key}>
                     <ContactRow
+                      index={index}
                       item={contact}
                       colors={colors}
                       actionLabel={busyContact === contact.key ? '...' : item.action}

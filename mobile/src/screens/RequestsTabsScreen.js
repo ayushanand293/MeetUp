@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
     View, Text, FlatList, TouchableOpacity,
-    Alert, ActivityIndicator, RefreshControl, Animated, Dimensions,
+    Alert, ActivityIndicator, RefreshControl, Animated, Dimensions, TouchableWithoutFeedback,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import client from '../api/client';
 import analyticsService from '../services/analyticsService';
-import { useTheme, Spacing, Radius, Font } from '../theme';
+import { useTheme, Spacing, Radius, Font, anim } from '../theme';
 
 const RequestsTabsScreen = ({ route, navigation }) => {
     const { colors } = useTheme();
@@ -362,7 +362,6 @@ const RequestsTabsScreen = ({ route, navigation }) => {
     );
 };
 
-// Incoming Request Card (from AcceptRequestScreen)
 const IncomingRequestCard = ({ item, index, colors, accepting, onAccept, onDecline, linked }) => {
     const opacity = useRef(new Animated.Value(0)).current;
     const translateY = useRef(new Animated.Value(24)).current;
@@ -375,13 +374,14 @@ const IncomingRequestCard = ({ item, index, colors, accepting, onAccept, onDecli
     }, []);
 
     const initials = (item.requester_name || '?')[0].toUpperCase();
+    const hasDestination = Boolean(item.destination);
 
     return (
         <Animated.View style={{
             opacity,
             transform: [{ translateY }],
             backgroundColor: colors.surface,
-            borderRadius: Radius.lg,
+            borderRadius: Radius.md,
             padding: Spacing.md,
             marginBottom: Spacing.sm,
             borderWidth: 1,
@@ -397,7 +397,8 @@ const IncomingRequestCard = ({ item, index, colors, accepting, onAccept, onDecli
                     <Text style={{ color: colors.textPrimary, fontWeight: '700', fontSize: 18 }}>{initials}</Text>
                 </View>
                 <View style={{ flex: 1 }}>
-                    <Text style={[Font.subtitle, { color: colors.textPrimary, fontSize: 15 }]}>{item.requester_name}</Text>
+                    <Text style={[Font.label, { color: colors.textMuted, marginBottom: 3 }]}>Wants to meet</Text>
+                    <Text style={[Font.subtitle, { color: colors.textPrimary, fontSize: 16 }]} numberOfLines={1}>{item.requester_name}</Text>
                 </View>
                 {linked && (
                     <View style={{
@@ -416,26 +417,91 @@ const IncomingRequestCard = ({ item, index, colors, accepting, onAccept, onDecli
                 )}
                 {item.expires_at && <ExpiryBadge expiresAt={item.expires_at} colors={colors} />}
             </View>
-            <View style={{ flexDirection: 'row', gap: 8 }}>
-                <TouchableOpacity style={{ flex: 1, borderWidth: 1, borderColor: colors.border, borderRadius: Radius.md, paddingVertical: 12, alignItems: 'center' }} onPress={onDecline}>
-                    <Text style={{ color: colors.textMuted, fontWeight: '600', fontSize: 14 }}>Decline</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={{
-                    flex: 2,
-                    backgroundColor: colors.textPrimary,
+            {hasDestination ? (
+                <View style={{
+                    borderWidth: 1,
+                    borderColor: colors.borderLight,
+                    backgroundColor: colors.surfaceElevated,
                     borderRadius: Radius.md,
+                    padding: 12,
+                    marginBottom: Spacing.md,
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                }}>
+                    <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center', marginRight: 10 }}>
+                        <Text style={{ color: colors.textPrimary, fontWeight: '900', fontSize: 14 }}>⌖</Text>
+                    </View>
+                    <View style={{ flex: 1 }}>
+                        <Text style={{ color: colors.textMuted, fontSize: 10, fontWeight: '900', marginBottom: 3 }}>MEET AT</Text>
+                        <Text style={{ color: colors.textPrimary, fontWeight: '800', fontSize: 14 }} numberOfLines={1}>
+                            {item.destination.name}
+                        </Text>
+                        {!!item.destination.address && (
+                            <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 3, lineHeight: 16 }} numberOfLines={2}>
+                                {item.destination.address}
+                            </Text>
+                        )}
+                    </View>
+                </View>
+            ) : (
+                <View style={{
+                    borderWidth: 1,
+                    borderColor: colors.border,
+                    backgroundColor: colors.surfaceSoft,
+                    borderRadius: Radius.md,
+                    padding: 10,
+                    marginBottom: Spacing.md,
+                }}>
+                    <Text style={{ color: colors.textSecondary, fontSize: 12, fontWeight: '700' }}>
+                        No destination attached. Accept to share live locations.
+                    </Text>
+                </View>
+            )}
+            <View style={{ flexDirection: 'row', gap: 8 }}>
+                <ActionBtn label="Decline" onPress={onDecline} colors={colors} type="secondary" />
+                <ActionBtn label="Accept" onPress={onAccept} colors={colors} type="primary" loading={accepting} disabled={accepting} />
+            </View>
+        </Animated.View>
+    );
+};
+
+const ActionBtn = ({ label, onPress, colors, type, loading, disabled }) => {
+    const scale = useRef(new Animated.Value(1)).current;
+    return (
+        <Animated.View style={{ flex: type === 'primary' ? 2 : 1, transform: [{ scale }] }}>
+            <TouchableWithoutFeedback
+                onPressIn={() => anim.pressIn(scale)}
+                onPressOut={() => anim.pressOut(scale)}
+                onPress={onPress}
+                disabled={disabled}
+            >
+                <View style={{
+                    backgroundColor: type === 'primary' ? colors.textPrimary : colors.surface,
+                    borderWidth: 1,
+                    borderColor: type === 'primary' ? colors.textPrimary : colors.border,
+                    borderRadius: Radius.pill,
                     paddingVertical: 12,
                     alignItems: 'center',
-                    opacity: accepting ? 0.6 : 1,
-                    shadowColor: colors.textPrimary,
-                    shadowOpacity: 0.08,
-                    shadowOffset: { width: 0, height: 6 },
-                    shadowRadius: 10,
-                    elevation: 2,
-                }} onPress={onAccept} disabled={accepting}>
-                    {accepting ? <ActivityIndicator size="small" color={colors.bg} /> : <Text style={{ color: colors.bg, fontWeight: '700', fontSize: 14 }}>Accept</Text>}
-                </TouchableOpacity>
-            </View>
+                    opacity: disabled ? 0.6 : 1,
+                    ...(type === 'primary' ? {
+                        shadowColor: colors.textPrimary,
+                        shadowOpacity: 0.1,
+                        shadowOffset: { width: 0, height: 4 },
+                        shadowRadius: 8,
+                        elevation: 3,
+                    } : {})
+                }}>
+                    {loading ? (
+                        <ActivityIndicator size="small" color={colors.bg} />
+                    ) : (
+                        <Text style={{ 
+                            color: type === 'primary' ? colors.bg : colors.textMuted, 
+                            fontWeight: '800', 
+                            fontSize: 14 
+                        }}>{label}</Text>
+                    )}
+                </View>
+            </TouchableWithoutFeedback>
         </Animated.View>
     );
 };
@@ -519,6 +585,32 @@ const OutgoingRequestCard = ({ item, index, colors }) => {
                     </Text>
                 </View>
             </View>
+
+            {!!item.destination && (
+                <View style={{
+                    borderWidth: 1,
+                    borderColor: colors.borderLight,
+                    backgroundColor: colors.surfaceElevated,
+                    borderRadius: Radius.md,
+                    padding: 10,
+                    marginBottom: Spacing.sm,
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                }}>
+                    <Text style={{ color: colors.textSecondary, fontWeight: '900', fontSize: 13, marginRight: 8 }}>⌖</Text>
+                    <View style={{ flex: 1 }}>
+                        <Text style={{ color: colors.textMuted, fontSize: 10, fontWeight: '900', marginBottom: 2 }}>MEET AT</Text>
+                        <Text style={{ color: colors.textPrimary, fontWeight: '800', fontSize: 13 }} numberOfLines={1}>
+                            {item.destination.name}
+                        </Text>
+                        {!!item.destination.address && (
+                            <Text style={{ color: colors.textSecondary, fontSize: 11, marginTop: 2 }} numberOfLines={1}>
+                                {item.destination.address}
+                            </Text>
+                        )}
+                    </View>
+                </View>
+            )}
 
             {/* Expiry countdown */}
             {item.expires_at && (
