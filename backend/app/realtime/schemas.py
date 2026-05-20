@@ -8,10 +8,12 @@ from pydantic import BaseModel, Field
 class EventType(StrEnum):
     # Client -> Server
     LOCATION_UPDATE = "location_update"
+    ROUTE_MODE_UPDATE = "route_mode_update"
     END_SESSION = "end_session"
 
     # Server -> Client
     PEER_LOCATION = "peer_location"
+    PEER_ROUTE_MODE = "peer_route_mode"
     SESSION_ENDED = "session_ended"
     PRESENCE_UPDATE = "presence_update"
     ERROR = "error"
@@ -51,6 +53,24 @@ class PeerLocationPayload(LocationPayload):
 class PeerLocationEvent(BaseModel):
     type: EventType = EventType.PEER_LOCATION
     payload: PeerLocationPayload
+
+
+class RouteModePayload(BaseModel):
+    mode: str
+
+
+class RouteModeUpdateEvent(BaseModel):
+    type: EventType = EventType.ROUTE_MODE_UPDATE
+    payload: RouteModePayload
+
+
+class PeerRouteModePayload(RouteModePayload):
+    user_id: UUID
+
+
+class PeerRouteModeEvent(BaseModel):
+    type: EventType = EventType.PEER_ROUTE_MODE
+    payload: PeerRouteModePayload
 
 
 class SessionEndedPayload(BaseModel):

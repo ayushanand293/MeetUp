@@ -1,15 +1,14 @@
 import React, { useEffect, useMemo, useRef } from 'react';
 import { AccessibilityInfo, Animated, Easing, Image, StyleSheet, Text, View } from 'react-native';
 import * as Haptics from 'expo-haptics';
+import ParticleBackground from './ParticleBackground';
+import { useTheme } from '../theme';
 
 const LOGO_SOURCE = require('../../assets/meetup-logo-cropped.png');
 
-const AnimatedLaunchScreen = ({ onComplete, duration = 2100, backgroundColor = '#F6F6F6' }) => {
+const AnimatedLaunchScreen = ({ onComplete, duration = 2100, backgroundColor }) => {
+  const { colors, isDark } = useTheme();
   const containerOpacity = useRef(new Animated.Value(1)).current;
-
-  const auroraA = useRef(new Animated.Value(0)).current;
-  const auroraB = useRef(new Animated.Value(0)).current;
-  const auroraC = useRef(new Animated.Value(0)).current;
 
   const cardOpacity = useRef(new Animated.Value(0)).current;
   const cardScale = useRef(new Animated.Value(0.86)).current;
@@ -51,7 +50,6 @@ const AnimatedLaunchScreen = ({ onComplete, duration = 2100, backgroundColor = '
     let fadeTimeout = null;
     let shimmerLoop = null;
     let dotLoop = null;
-    let auroraLoop = null;
 
     const run = async () => {
       const reduceMotion = await AccessibilityInfo.isReduceMotionEnabled();
@@ -82,52 +80,6 @@ const AnimatedLaunchScreen = ({ onComplete, duration = 2100, backgroundColor = '
       hapticTimeout = setTimeout(() => {
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
       }, timeline.settleAt);
-
-      auroraLoop = Animated.loop(
-        Animated.sequence([
-          Animated.parallel([
-            Animated.timing(auroraA, {
-              toValue: 1,
-              duration: 1800,
-              easing: Easing.inOut(Easing.quad),
-              useNativeDriver: true,
-            }),
-            Animated.timing(auroraB, {
-              toValue: 1,
-              duration: 2200,
-              easing: Easing.inOut(Easing.quad),
-              useNativeDriver: true,
-            }),
-            Animated.timing(auroraC, {
-              toValue: 1,
-              duration: 2000,
-              easing: Easing.inOut(Easing.quad),
-              useNativeDriver: true,
-            }),
-          ]),
-          Animated.parallel([
-            Animated.timing(auroraA, {
-              toValue: 0,
-              duration: 1800,
-              easing: Easing.inOut(Easing.quad),
-              useNativeDriver: true,
-            }),
-            Animated.timing(auroraB, {
-              toValue: 0,
-              duration: 2200,
-              easing: Easing.inOut(Easing.quad),
-              useNativeDriver: true,
-            }),
-            Animated.timing(auroraC, {
-              toValue: 0,
-              duration: 2000,
-              easing: Easing.inOut(Easing.quad),
-              useNativeDriver: true,
-            }),
-          ]),
-        ])
-      );
-      auroraLoop.start();
 
       Animated.sequence([
         Animated.delay(timeline.introDelay),
@@ -275,12 +227,8 @@ const AnimatedLaunchScreen = ({ onComplete, duration = 2100, backgroundColor = '
       clearTimeout(fadeTimeout);
       shimmerLoop?.stop();
       dotLoop?.stop();
-      auroraLoop?.stop();
     };
   }, [
-    auroraA,
-    auroraB,
-    auroraC,
     cardOpacity,
     cardScale,
     cardY,
@@ -302,15 +250,16 @@ const AnimatedLaunchScreen = ({ onComplete, duration = 2100, backgroundColor = '
     titleY,
   ]);
 
-  const auroraATranslateY = auroraA.interpolate({ inputRange: [0, 1], outputRange: [0, -14] });
-  const auroraBTranslateX = auroraB.interpolate({ inputRange: [0, 1], outputRange: [0, 18] });
-  const auroraCTranslateY = auroraC.interpolate({ inputRange: [0, 1], outputRange: [0, 16] });
+  const rootBg = backgroundColor || colors.bg;
 
   return (
-    <Animated.View style={[styles.root, { backgroundColor, opacity: containerOpacity }]} pointerEvents="none">
-      <Animated.View style={[styles.auroraOne, { transform: [{ translateY: auroraATranslateY }] }]} />
-      <Animated.View style={[styles.auroraTwo, { transform: [{ translateX: auroraBTranslateX }] }]} />
-      <Animated.View style={[styles.auroraThree, { transform: [{ translateY: auroraCTranslateY }] }]} />
+    <Animated.View style={[styles.root, { backgroundColor: rootBg, opacity: containerOpacity }]} pointerEvents="none">
+      <ParticleBackground
+        count={40}
+        dotColor={isDark ? 'rgba(177,18,27,0.40)' : 'rgba(177,18,27,0.35)'}
+        dotColorAlt={isDark ? 'rgba(255,255,255,0.25)' : 'rgba(100,100,100,0.25)'}
+        lineColor={isDark ? 'rgba(177,18,27,0.10)' : 'rgba(177,18,27,0.06)'}
+      />
 
       <Animated.View
         style={[
@@ -356,33 +305,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     zIndex: 1000,
-  },
-  auroraOne: {
-    position: 'absolute',
-    width: 300,
-    height: 300,
-    borderRadius: 150,
-    top: -120,
-    right: -80,
-    backgroundColor: 'rgba(0, 0, 0, 0.06)',
-  },
-  auroraTwo: {
-    position: 'absolute',
-    width: 270,
-    height: 270,
-    borderRadius: 135,
-    bottom: -100,
-    left: -80,
-    backgroundColor: 'rgba(0, 0, 0, 0.08)',
-  },
-  auroraThree: {
-    position: 'absolute',
-    width: 180,
-    height: 180,
-    borderRadius: 90,
-    bottom: 170,
-    right: 30,
-    backgroundColor: 'rgba(255, 255, 255, 0.56)',
   },
   halo: {
     position: 'absolute',

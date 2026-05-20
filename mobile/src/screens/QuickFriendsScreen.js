@@ -22,35 +22,35 @@ const QuickFriendRow = ({ friend, index, handleMeetAgain, colors }) => {
                     backgroundColor: colors.surface,
                     borderWidth: 1,
                     borderColor: colors.border,
-                    borderRadius: Radius.lg,
+                    borderRadius: 22,
                     padding: Spacing.md,
                     marginBottom: Spacing.sm,
                     flexDirection: 'row',
                     alignItems: 'center',
                     shadowColor: colors.textPrimary,
-                    shadowOpacity: 0.05,
-                    shadowOffset: { width: 0, height: 4 },
-                    shadowRadius: 8,
-                    elevation: 2,
+                    shadowOpacity: 0.06,
+                    shadowOffset: { width: 0, height: 10 },
+                    shadowRadius: 16,
+                    elevation: 4,
                 }}>
                     <View style={{
                         width: 46,
                         height: 46,
-                        borderRadius: 23,
-                        backgroundColor: colors.surfaceElevated,
+                        borderRadius: 16,
+                        backgroundColor: colors.textPrimary,
                         borderWidth: 1,
-                        borderColor: colors.border,
+                        borderColor: colors.textPrimary,
                         justifyContent: 'center',
                         alignItems: 'center',
                         marginRight: 14,
                     }}>
-                        <Text style={{ color: colors.textPrimary, fontSize: 18, fontWeight: '800' }}>
+                        <Text style={{ color: colors.bg, fontSize: 18, fontWeight: '900' }}>
                             {(friend.co_participant_name || '?')[0].toUpperCase()}
                         </Text>
                     </View>
                     <View style={{ flex: 1 }}>
                         <Text style={[Font.subtitle, { color: colors.textPrimary, fontSize: 16 }]} numberOfLines={1}>{friend.co_participant_name}</Text>
-                        <Text style={[Font.caption, { color: colors.textMuted, marginTop: 2 }]}>Last met {formatTimeAgo(friend.ended_at)} • {friend.meetup_count || 1} meetups</Text>
+                        <Text style={[Font.caption, { color: colors.textMuted, marginTop: 3 }]}>Last met {formatTimeAgo(friend.ended_at)} • {friend.meetup_count || 1} meetup{(friend.meetup_count || 1) > 1 ? 's' : ''}</Text>
                     </View>
                     <TouchableOpacity
                         onPress={() => handleMeetAgain(friend)}
@@ -164,6 +164,37 @@ const QuickFriendsScreen = ({ navigation }) => {
                 <Text style={[Font.body, { color: colors.textSecondary, marginTop: 4 }]}>People you already met. Tap once to meet again.</Text>
             </View>
 
+            {quickFriends.length > 0 && (
+                <View style={{
+                    backgroundColor: colors.surface,
+                    borderWidth: 1,
+                    borderColor: colors.border,
+                    borderRadius: 22,
+                    padding: 14,
+                    marginBottom: Spacing.md,
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                }}>
+                    <View style={{
+                        width: 38,
+                        height: 38,
+                        borderRadius: 14,
+                        backgroundColor: colors.surfaceElevated,
+                        borderWidth: 1,
+                        borderColor: colors.border,
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        marginRight: 10,
+                    }}>
+                        <Text style={{ color: colors.textPrimary, fontWeight: '900', fontSize: 18 }}>↺</Text>
+                    </View>
+                    <View style={{ flex: 1 }}>
+                        <Text style={{ color: colors.textPrimary, fontWeight: '900', fontSize: 15 }}>{quickFriends.length} familiar face{quickFriends.length > 1 ? 's' : ''}</Text>
+                        <Text style={{ color: colors.textMuted, fontWeight: '700', fontSize: 12, marginTop: 2 }}>Sorted by recent and frequent meetups</Text>
+                    </View>
+                </View>
+            )}
+
             <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: Spacing.xxl }}>
                 {quickFriends.length === 0 && (
                     <View style={{
@@ -172,9 +203,11 @@ const QuickFriendsScreen = ({ navigation }) => {
                         justifyContent: 'center',
                         paddingVertical: Spacing.xxl,
                     }}>
-                        <Text style={{ fontSize: 52, color: colors.textMuted, marginBottom: Spacing.md }}>◎</Text>
+                        <View style={{ width: 72, height: 72, borderRadius: 24, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center', marginBottom: Spacing.md }}>
+                            <Text style={{ fontSize: 34, color: colors.textPrimary, fontWeight: '900' }}>↺</Text>
+                        </View>
                         <Text style={[Font.subtitle, { color: colors.textPrimary, marginBottom: 6 }]}>No quick friends yet</Text>
-                        <Text style={[Font.body, { color: colors.textSecondary }]}>Complete a meetup to see history.</Text>
+                        <Text style={[Font.body, { color: colors.textSecondary, textAlign: 'center' }]}>Complete a meetup and your best reconnects will appear here.</Text>
                     </View>
                 )}
 

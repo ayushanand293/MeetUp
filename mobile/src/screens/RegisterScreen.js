@@ -210,7 +210,7 @@ const RegisterScreen = ({ navigation }) => {
 
   return (
     <View
-      style={[styles.root, { backgroundColor: isDark ? '#0A0A0A' : colors.bg }]}
+      style={[styles.root, { backgroundColor: colors.bg }]}
       onTouchStart={handleTouch}
       onTouchMove={handleTouch}
       onTouchEnd={handleTouchEnd}
@@ -250,7 +250,7 @@ const RegisterScreen = ({ navigation }) => {
                   <Text style={[styles.heroTitle, { color: isDark ? '#FFFFFF' : colors.textPrimary }]}>
                     Create account
                   </Text>
-                  <Text style={[styles.heroSubtitle, { color: isDark ? 'rgba(255,255,255,0.55)' : colors.textSecondary }]}>
+                  <Text style={[styles.heroSubtitle, { color: colors.textSecondary }]}>
                     Two quick steps to get started
                   </Text>
                 </Animated.View>
@@ -269,7 +269,7 @@ const RegisterScreen = ({ navigation }) => {
                   }]}>
                     <View style={styles.stepHeader}>
                       <View style={[styles.stepBadge, {
-                        backgroundColor: phoneVerified ? red : (isDark ? '#222' : colors.surfaceElevated),
+                        backgroundColor: phoneVerified ? red : colors.surfaceElevated,
                       }]}>
                         <Text style={[styles.stepBadgeText, {
                           color: phoneVerified ? '#FFF' : colors.textPrimary,
@@ -392,7 +392,7 @@ const RegisterScreen = ({ navigation }) => {
                       borderColor: colors.border,
                     }]}>
                       <View style={[styles.stepBadge, {
-                        backgroundColor: isDark ? '#222' : colors.surface,
+                        backgroundColor: isDark ? colors.surfaceElevated : colors.surface,
                         opacity: 0.5,
                       }]}>
                         <Text style={[styles.stepBadgeText, { color: colors.textMuted }]}>2</Text>
@@ -456,7 +456,7 @@ const RegisterScreen = ({ navigation }) => {
 
                       <TouchableOpacity
                         style={[styles.primaryButton, {
-                          backgroundColor: canSave ? red : (isDark ? '#222' : colors.surfaceElevated),
+                          backgroundColor: canSave ? red : colors.surfaceElevated,
                           opacity: loading ? 0.65 : 1,
                           shadowOpacity: canSave ? 0.25 : 0,
                         }]}

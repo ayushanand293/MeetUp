@@ -25,11 +25,17 @@ import {
   Share,
   Linking,
   ScrollView,
+  Platform,
+  Dimensions,
+  PanResponder,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
+import Svg, { Path } from 'react-native-svg';
 import { AppState } from 'react-native';
 import { useIsFocused } from '@react-navigation/native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ExpoLinking from 'expo-linking';
+import * as Haptics from 'expo-haptics';
 import { useAuth } from '../context/AuthContext';
 import locationService from '../services/locationService';
 import realtimeService from '../services/realtimeService';
@@ -42,6 +48,10 @@ import { useTheme, Spacing, Radius, Font } from '../theme';
 import ModernDistanceBar from '../components/ModernDistanceBar';
 
 const DEBUG = process.env.NODE_ENV !== 'production';
+const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
+const DEFAULT_ROUTE_MODE = TransportMode.WALKING.id;
+const isValidRouteMode = mode => Object.values(TransportMode).some(item => item.id === mode);
+const routeModeStorageKey = (sessionId, userId, scope = 'me') => `meetup_route_mode:${sessionId}:${userId || 'anon'}:${scope}`;
 
 const getSessionEndMessage = (reason) => {
   if (reason === 'USER_ACTION') return 'The meetup was ended by one of you.';
@@ -130,8 +140,10 @@ const ActiveSessionScreen = ({ route, navigation }) => {
   const [isSharingInvite, setIsSharingInvite] = useState(false);
 
   // Routing state
-  const [selectedMode, setSelectedMode] = useState('foot-walking');
-  const selectedModeRef = useRef('foot-walking'); // ref avoids stale closure in timeout
+  const [selectedMode, setSelectedMode] = useState(DEFAULT_ROUTE_MODE);
+  const [peerSelectedMode, setPeerSelectedMode] = useState(DEFAULT_ROUTE_MODE);
+  const [modeMenuOpen, setModeMenuOpen] = useState(false);
+  const selectedModeRef = useRef(DEFAULT_ROUTE_MODE); // ref avoids stale closure in timeout
   const [routeCoords, setRouteCoords] = useState(null);
   const [routeDistance, setRouteDistance] = useState(null);
   const [routeDuration, setRouteDuration] = useState(null);
@@ -151,6 +163,60 @@ const ActiveSessionScreen = ({ route, navigation }) => {
   const [destination, setDestination] = useState(friend?.destination || null);
   const distanceText = formatSessionDistance(routeDistance);
   const durationText = routeDuration != null ? formatDuration(routeDuration) : null;
+  const isWithinArrivalRange = routeDistance != null && routeDistance <= 50;
+  const selectedTransportMode = Object.values(TransportMode).find(mode => mode.id === selectedMode) || TransportMode.WALKING;
+  const peerTransportMode = Object.values(TransportMode).find(mode => mode.id === peerSelectedMode) || TransportMode.WALKING;
+  const tapHaptic = useCallback(() => {
+    Haptics.selectionAsync().catch(() => {});
+  }, []);
+  const impactHaptic = useCallback((style = Haptics.ImpactFeedbackStyle.Light) => {
+    Haptics.impactAsync(style).catch(() => {});
+  }, []);
+  const screenHeight = Dimensions.get('window').height;
+  const sheetCollapsedHeight = Math.round(screenHeight * 0.26);
+  const sheetExpandedHeight = Math.round(screenHeight * 0.78);
+  const sheetDragRange = sheetExpandedHeight - sheetCollapsedHeight;
+  const sheetProgress = useRef(new Animated.Value(0)).current;
+  const sheetProgressRef = useRef(0);
+  const sheetDragStartRef = useRef(0);
+  const sheetMaxHeight = sheetProgress.interpolate({
+    inputRange: [0, 1],
+    outputRange: [sheetCollapsedHeight, sheetExpandedHeight],
+  });
+
+  const snapSheetTo = useCallback((nextProgress) => {
+    if (Math.abs(sheetProgressRef.current - nextProgress) > 0.1) {
+      impactHaptic(Haptics.ImpactFeedbackStyle.Light);
+    }
+    sheetProgressRef.current = nextProgress;
+    Animated.spring(sheetProgress, {
+      toValue: nextProgress,
+      useNativeDriver: false,
+      damping: 22,
+      stiffness: 190,
+      mass: 0.9,
+    }).start();
+  }, [impactHaptic, sheetProgress]);
+
+  const sheetPanResponder = useRef(PanResponder.create({
+    onStartShouldSetPanResponder: () => true,
+    onMoveShouldSetPanResponder: (_, gesture) => Math.abs(gesture.dy) > 4,
+    onPanResponderGrant: () => {
+      sheetDragStartRef.current = sheetProgressRef.current;
+    },
+    onPanResponderMove: (_, gesture) => {
+      const nextProgress = clamp(sheetDragStartRef.current - (gesture.dy / sheetDragRange), 0, 1);
+      sheetProgress.setValue(nextProgress);
+      sheetProgressRef.current = nextProgress;
+    },
+    onPanResponderRelease: (_, gesture) => {
+      const projected = sheetProgressRef.current - (gesture.vy * 0.18);
+      snapSheetTo(projected > 0.5 ? 1 : 0);
+    },
+    onPanResponderTerminate: () => {
+      snapSheetTo(sheetProgressRef.current > 0.5 ? 1 : 0);
+    },
+  })).current;
 
   // Peer info
   const [peerLastSeenText, setPeerLastSeenText] = useState('Not yet connected');
@@ -178,6 +244,8 @@ const ActiveSessionScreen = ({ route, navigation }) => {
   // Flow State
   const [meetingSuccess, setMeetingSuccess] = useState(false);
   const successPulse = useRef(new Animated.Value(1)).current;
+  const arrivalCtaScale = useRef(new Animated.Value(1)).current;
+  const wasWithinArrivalRangeRef = useRef(false);
   const [isConfirmingArrival, setIsConfirmingArrival] = useState(false);
   const [arrivalCountdown, setArrivalCountdown] = useState(60);
   const arrivalTimerRef = useRef(null);
@@ -187,6 +255,32 @@ const ActiveSessionScreen = ({ route, navigation }) => {
   const lastPropagationMetricAtRef = useRef(0);
   const reconnectMetricEmittedRef = useRef(false);
   const sessionIdRef = useRef(null);
+
+  useEffect(() => {
+    if (isWithinArrivalRange && !wasWithinArrivalRangeRef.current) {
+      wasWithinArrivalRangeRef.current = true;
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+      Animated.sequence([
+        Animated.spring(arrivalCtaScale, {
+          toValue: 1.05,
+          useNativeDriver: true,
+          damping: 12,
+          stiffness: 220,
+        }),
+        Animated.spring(arrivalCtaScale, {
+          toValue: 1,
+          useNativeDriver: true,
+          damping: 14,
+          stiffness: 180,
+        }),
+      ]).start();
+      return;
+    }
+
+    if (!isWithinArrivalRange) {
+      wasWithinArrivalRangeRef.current = false;
+    }
+  }, [arrivalCtaScale, isWithinArrivalRange]);
 
   const _subscribeToLocationEvents = useCallback(() => {
     const unsubscribes = {};
@@ -314,6 +408,20 @@ const ActiveSessionScreen = ({ route, navigation }) => {
         }
 
         DEBUG && console.log('[ActiveSessionScreen] Session ID:', activeSessionId);
+        const storedOwnMode = await AsyncStorage.getItem(routeModeStorageKey(activeSessionId, user?.id, 'me'));
+        if (isValidRouteMode(storedOwnMode)) {
+          selectedModeRef.current = storedOwnMode;
+          setSelectedMode(storedOwnMode);
+        } else {
+          selectedModeRef.current = DEFAULT_ROUTE_MODE;
+          setSelectedMode(DEFAULT_ROUTE_MODE);
+        }
+
+        const storedPeerMode = await AsyncStorage.getItem(routeModeStorageKey(activeSessionId, user?.id, 'peer'));
+        if (isValidRouteMode(storedPeerMode)) {
+          setPeerSelectedMode(storedPeerMode);
+        }
+
         rememberActiveSession({
           session_id: activeSessionId,
           peer_id: friend?.id || null,
@@ -422,6 +530,7 @@ const ActiveSessionScreen = ({ route, navigation }) => {
           activeSessionId,
           wsBaseUrl
         );
+        realtimeService.sendRouteModeUpdate(selectedModeRef.current);
 
         setSessionId(activeSessionId);
         sessionIdRef.current = activeSessionId;
@@ -529,6 +638,17 @@ const ActiveSessionScreen = ({ route, navigation }) => {
 
       setPeerLastSeenText('Just now');
       setPeerIsStale(false);
+    });
+
+    unsubscribes.onPeerRouteMode = realtimeService.on('peerRouteMode', (payload) => {
+      DEBUG && console.log('[ActiveSessionScreen] Peer route mode:', payload.mode);
+      if (!isMountedRef.current) return;
+      if (isValidRouteMode(payload.mode)) {
+        setPeerSelectedMode(payload.mode);
+        if (sessionIdRef.current) {
+          AsyncStorage.setItem(routeModeStorageKey(sessionIdRef.current, user?.id, 'peer'), payload.mode).catch(() => {});
+        }
+      }
     });
 
     unsubscribes.onPresenceUpdate = realtimeService.on('presenceUpdate', (payload) => {
@@ -643,7 +763,7 @@ const ActiveSessionScreen = ({ route, navigation }) => {
     });
 
     wsEventUnsubscribesRef.current = unsubscribes;
-  }, []);
+  }, [user?.id]);
 
   /**
    * Location streaming loop
@@ -691,6 +811,16 @@ const ActiveSessionScreen = ({ route, navigation }) => {
       }
     };
   }, [myLocation, wsStatus, isFocused, appState, isSharingPaused]);
+
+  useEffect(() => {
+    selectedModeRef.current = selectedMode;
+    if (sessionIdRef.current && isValidRouteMode(selectedMode)) {
+      AsyncStorage.setItem(routeModeStorageKey(sessionIdRef.current, user?.id, 'me'), selectedMode).catch(() => {});
+    }
+    if (realtimeService.getStatus().connected) {
+      realtimeService.sendRouteModeUpdate(selectedMode);
+    }
+  }, [selectedMode, user?.id]);
 
   /**
    * Helper to safely inject map data into WebView
@@ -786,7 +916,7 @@ const ActiveSessionScreen = ({ route, navigation }) => {
 
       const [myRoute, friendRoute] = await Promise.all([
         getRoute(myLocation, destinationPoint, mode),
-        peerLocation ? getRoute(peerLocation, destinationPoint, mode) : Promise.resolve(null),
+        peerLocation ? getRoute(peerLocation, destinationPoint, peerSelectedMode) : Promise.resolve(null),
       ]);
 
       if (myRoute) {
@@ -817,7 +947,7 @@ const ActiveSessionScreen = ({ route, navigation }) => {
     }, 1800);
 
     return () => clearTimeout(destinationRouteFetchRef.current);
-  }, [destination?.lat, destination?.lon, myLocation?.lat, myLocation?.lon, peerLocation?.lat, peerLocation?.lon, selectedMode]);
+  }, [destination?.lat, destination?.lon, myLocation?.lat, myLocation?.lon, peerLocation?.lat, peerLocation?.lon, selectedMode, peerSelectedMode]);
 
   const destinationDistanceText = destinationRouteDistance != null
     ? formatDistance(destinationRouteDistance)
@@ -1151,6 +1281,26 @@ const ActiveSessionScreen = ({ route, navigation }) => {
           <style>
             body { margin: 0; padding: 0; font-family: -apple-system, sans-serif; }
             #map { position: absolute; top: 0; bottom: 0; width: 100%; }
+            .leaflet-container {
+              background: #eef2f3;
+              cursor: grab;
+            }
+            .leaflet-container:active {
+              cursor: grabbing;
+            }
+            .leaflet-tile {
+              filter: contrast(1.12) saturate(1.16) brightness(0.99);
+            }
+            .leaflet-control-zoom {
+              border: 1px solid rgba(23,33,47,0.18) !important;
+              box-shadow: 0 6px 18px rgba(0,0,0,0.12);
+              border-radius: 12px;
+              overflow: hidden;
+            }
+            .leaflet-control-zoom a {
+              color: #111827 !important;
+              font-weight: 800;
+            }
             .label-icon { background: transparent; border: none; }
             .marker-label-wrap {
               transform: translateY(20px);
@@ -1159,7 +1309,7 @@ const ActiveSessionScreen = ({ route, navigation }) => {
             }
             .marker-label {
               font-size: 11px;
-              font-weight: 700;
+              font-weight: 800;
               color: #17212f;
               background: rgba(255,255,255,0.98);
               border: 1px solid rgba(23,33,47,0.18);
@@ -1176,11 +1326,11 @@ const ActiveSessionScreen = ({ route, navigation }) => {
               border-color: rgba(15, 22, 35, 0.26);
             }
             .user-marker {
-              width: 14px;
-              height: 14px;
-              border-radius: 7px;
+              width: 17px;
+              height: 17px;
+              border-radius: 9px;
               border: 2px solid #ffffff;
-              box-shadow: 0 0 0 2px var(--marker-color), 0 3px 8px rgba(0, 0, 0, 0.35);
+              box-shadow: 0 0 0 3px var(--marker-color), 0 7px 18px rgba(0, 0, 0, 0.32);
               background: var(--marker-color);
               position: relative;
             }
@@ -1197,11 +1347,11 @@ const ActiveSessionScreen = ({ route, navigation }) => {
               animation: userPulse 3s infinite ease-out;
             }
             .peer-marker {
-              width: 14px;
-              height: 14px;
-              border-radius: 7px;
+              width: 17px;
+              height: 17px;
+              border-radius: 9px;
               border: 2px solid #ffffff;
-              box-shadow: 0 0 0 2px var(--marker-color), 0 3px 8px rgba(0, 0, 0, 0.35);
+              box-shadow: 0 0 0 3px var(--marker-color), 0 7px 18px rgba(0, 0, 0, 0.32);
               background: var(--marker-color);
               position: relative;
             }
@@ -1230,14 +1380,21 @@ const ActiveSessionScreen = ({ route, navigation }) => {
         <body>
           <div id="map"></div>
           <script>
-            const map = L.map('map').setView([37.7749, -122.4194], 14);
+            const map = L.map('map', {
+              zoomControl: true,
+              inertia: true,
+              inertiaDeceleration: 2600,
+              preferCanvas: true,
+              tap: true,
+              zoomSnap: 0.25
+            }).setView([37.7749, -122.4194], 14);
             L.tileLayer('https://{s}.basemaps.cartocdn.com/${colors.mapTile}/{z}/{x}/{y}{r}.png', {
               attribution: '\u00a9 OpenStreetMap \u00a9 CARTO',
               subdomains: 'abcd',
               maxZoom: 19
             }).addTo(map);
 
-            let myMarker, peerMarker, destinationMarker, myLabel, peerLabel, destinationLabel, myCircle, peerCircle, routeLine, destinationRouteLine, peerDestinationRouteLine;
+            let myMarker, peerMarker, destinationMarker, myLabel, peerLabel, destinationLabel, myCircle, peerCircle, routeLine, routeLineHalo, destinationRouteLine, destinationRouteLineHalo, peerDestinationRouteLine, peerDestinationRouteLineHalo;
             let firstFit = true;
 
             function makeLabel(text, kind) {
@@ -1255,8 +1412,8 @@ const ActiveSessionScreen = ({ route, navigation }) => {
               return L.divIcon({
                 className: 'label-icon',
                 html: '<div class="' + className + '" style="--marker-color:' + color + '"></div>',
-                iconSize: [14, 14],
-                iconAnchor: [7, 7]
+                iconSize: [17, 17],
+                iconAnchor: [8.5, 8.5]
               });
             }
 
@@ -1300,19 +1457,34 @@ const ActiveSessionScreen = ({ route, navigation }) => {
               }
 
               if (routeCoords && routeCoords.length > 1) {
+                if (routeLineHalo) routeLineHalo.setLatLngs(routeCoords);
+                else routeLineHalo = L.polyline(routeCoords, { color: '#ffffff', weight: 7.5, opacity: 0.82, dashArray: '10 6', lineCap: 'round', lineJoin: 'round' }).addTo(map);
                 if (routeLine) routeLine.setLatLngs(routeCoords);
-                else routeLine = L.polyline(routeCoords, { color: '${colors.routeLine}', weight: 3.5, opacity: 0.7, dashArray: '10 6' }).addTo(map);
-              } else if (routeLine) { routeLine.remove(); routeLine = null; }
+                else routeLine = L.polyline(routeCoords, { color: '${colors.routeLine}', weight: 4.5, opacity: 0.86, dashArray: '10 6', lineCap: 'round', lineJoin: 'round' }).addTo(map);
+              } else {
+                if (routeLine) { routeLine.remove(); routeLine = null; }
+                if (routeLineHalo) { routeLineHalo.remove(); routeLineHalo = null; }
+              }
 
               if (destinationRouteCoords && destinationRouteCoords.length > 1) {
+                if (destinationRouteLineHalo) destinationRouteLineHalo.setLatLngs(destinationRouteCoords);
+                else destinationRouteLineHalo = L.polyline(destinationRouteCoords, { color: '#ffffff', weight: 9, opacity: 0.9, lineCap: 'round', lineJoin: 'round' }).addTo(map);
                 if (destinationRouteLine) destinationRouteLine.setLatLngs(destinationRouteCoords);
-                else destinationRouteLine = L.polyline(destinationRouteCoords, { color: '${colors.myMarker}', weight: 4, opacity: 0.82 }).addTo(map);
-              } else if (destinationRouteLine) { destinationRouteLine.remove(); destinationRouteLine = null; }
+                else destinationRouteLine = L.polyline(destinationRouteCoords, { color: '${colors.myMarker}', weight: 5.5, opacity: 0.94, lineCap: 'round', lineJoin: 'round' }).addTo(map);
+              } else {
+                if (destinationRouteLine) { destinationRouteLine.remove(); destinationRouteLine = null; }
+                if (destinationRouteLineHalo) { destinationRouteLineHalo.remove(); destinationRouteLineHalo = null; }
+              }
 
               if (peerDestinationRouteCoords && peerDestinationRouteCoords.length > 1) {
+                if (peerDestinationRouteLineHalo) peerDestinationRouteLineHalo.setLatLngs(peerDestinationRouteCoords);
+                else peerDestinationRouteLineHalo = L.polyline(peerDestinationRouteCoords, { color: '#ffffff', weight: 8, opacity: 0.82, dashArray: '8 7', lineCap: 'round', lineJoin: 'round' }).addTo(map);
                 if (peerDestinationRouteLine) peerDestinationRouteLine.setLatLngs(peerDestinationRouteCoords);
-                else peerDestinationRouteLine = L.polyline(peerDestinationRouteCoords, { color: '${colors.peerMarker}', weight: 3.5, opacity: 0.62, dashArray: '8 6' }).addTo(map);
-              } else if (peerDestinationRouteLine) { peerDestinationRouteLine.remove(); peerDestinationRouteLine = null; }
+                else peerDestinationRouteLine = L.polyline(peerDestinationRouteCoords, { color: '${colors.peerMarker}', weight: 4.5, opacity: 0.74, dashArray: '8 7', lineCap: 'round', lineJoin: 'round' }).addTo(map);
+              } else {
+                if (peerDestinationRouteLine) { peerDestinationRouteLine.remove(); peerDestinationRouteLine = null; }
+                if (peerDestinationRouteLineHalo) { peerDestinationRouteLineHalo.remove(); peerDestinationRouteLineHalo = null; }
+              }
 
               if (destination) {
                 const { lat, lon, name } = destination;
@@ -1403,29 +1575,6 @@ const ActiveSessionScreen = ({ route, navigation }) => {
         )}
       />
 
-      {/* Status Badge */}
-      <View style={[
-        s.statusBadge,
-        wsStatus === 'connected' && s.statusConnected,
-        wsStatus === 'reconnecting' && s.statusReconnecting,
-        wsStatus === 'failed' && s.statusFailed,
-        wsStatus === 'disconnected' && s.statusDisconnected,
-      ]}>
-        <View style={[
-          s.statusDot,
-          wsStatus === 'connected' && s.dotGreen,
-          wsStatus === 'reconnecting' && s.dotOrange,
-          wsStatus === 'failed' && s.dotRed,
-          wsStatus === 'disconnected' && s.dotGray,
-        ]} />
-        <Text style={s.statusText}>
-          {wsStatus === 'connected' ? 'Live'
-            : wsStatus === 'reconnecting' ? `Reconnecting ${reconnectCountdown}s`
-              : wsStatus === 'failed' ? 'Disconnected'
-                : 'Offline'}
-        </Text>
-      </View>
-
       {/* Error Banner */}
       {(locationError || wsError) && (
         <View style={s.errorBanner}>
@@ -1455,40 +1604,156 @@ const ActiveSessionScreen = ({ route, navigation }) => {
         </View>
       )}
 
+      {peerLocation && (
+        <View style={s.mapModeControl}>
+          <TouchableOpacity
+            style={s.mapModeButton}
+            activeOpacity={0.85}
+            onPress={() => setModeMenuOpen(open => !open)}
+          >
+            {routeLoading ? (
+              <ActivityIndicator size="small" color={colors.textSecondary} />
+            ) : (
+              <Text style={s.mapModeIcon}>{selectedTransportMode.icon}</Text>
+            )}
+            <Text style={s.mapModeChevron}>{modeMenuOpen ? '⌃' : '⌄'}</Text>
+          </TouchableOpacity>
+
+          {modeMenuOpen && (
+            <View style={s.modeMenu}>
+              {Object.values(TransportMode).map(mode => (
+                <TouchableOpacity
+                  key={mode.id}
+                  style={[s.modeMenuItem, selectedMode === mode.id && s.modeMenuItemActive]}
+                  activeOpacity={0.85}
+                  onPress={() => {
+                    tapHaptic();
+                    setSelectedMode(mode.id);
+                    setModeMenuOpen(false);
+                  }}
+                >
+                  <Text style={s.modeMenuIcon}>{mode.icon}</Text>
+                  <Text style={[s.modeMenuLabel, selectedMode === mode.id && s.modeMenuLabelActive]}>
+                    {mode.label}
+                  </Text>
+                  {selectedMode === mode.id && <Text style={s.modeMenuCheck}>✓</Text>}
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+
+          <View style={[
+            s.statusBadge,
+            wsStatus === 'connected' && s.statusConnected,
+            wsStatus === 'reconnecting' && s.statusReconnecting,
+            wsStatus === 'failed' && s.statusFailed,
+            wsStatus === 'disconnected' && s.statusDisconnected,
+          ]}>
+            <View style={[
+              s.statusDot,
+              wsStatus === 'connected' && s.dotGreen,
+              wsStatus === 'reconnecting' && s.dotOrange,
+              wsStatus === 'failed' && s.dotRed,
+              wsStatus === 'disconnected' && s.dotGray,
+            ]} />
+            <Text style={s.statusText}>
+              {wsStatus === 'connected' ? 'Live'
+              : wsStatus === 'reconnecting' ? `${reconnectCountdown}s`
+                  : wsStatus === 'failed' ? 'Offline'
+                    : 'Offline'}
+            </Text>
+          </View>
+
+          <View style={s.sessionActions}>
+            <TouchableOpacity
+              style={[s.sessionAction, isSharingPaused && s.sessionActionActive]}
+              accessibilityLabel={isSharingPaused ? 'Resume sharing' : 'Pause sharing'}
+              onPress={() => {
+                impactHaptic();
+                handleTogglePauseSharing();
+              }}
+            >
+              <Text style={[s.sessionActionIcon, isSharingPaused && s.sessionActionLabelActive]}>{isSharingPaused ? '▶' : 'Ⅱ'}</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[s.sessionAction, s.sessionActionDanger]}
+              accessibilityLabel="End meetup"
+              onPress={() => {
+              impactHaptic(Haptics.ImpactFeedbackStyle.Medium);
+              handleEndSession();
+            }}>
+              <Text style={[s.sessionActionIcon, s.sessionActionDangerText]}>×</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[s.sessionAction, isSharingInvite && s.buttonDisabled]}
+              accessibilityLabel="Share invite"
+              onPress={() => {
+                tapHaptic();
+                handleShareInvite();
+              }}
+              disabled={isSharingInvite || !sessionId}
+            >
+              {isSharingInvite ? (
+                <ActivityIndicator size="small" color={colors.textSecondary} />
+              ) : (
+                <ShareNetworkIcon color={colors.textPrimary} />
+              )}
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
+      {routeDistance != null && (
+        <View style={s.mapDistanceChip}>
+          <ModernDistanceBar
+            distanceM={routeDistance}
+            maxDistanceM={500}
+            colors={colors}
+            variant="mapChip"
+            onPress={() => {
+              impactHaptic(Haptics.ImpactFeedbackStyle.Medium);
+              snapSheetTo(1);
+            }}
+          />
+        </View>
+      )}
+
       {/* Bottom Panel */}
-      <View style={s.bottomPanel}>
+      <Animated.View style={[s.bottomPanel, { maxHeight: sheetMaxHeight }]}>
+        <View style={s.sheetGrabberHitArea} {...sheetPanResponder.panHandlers}>
+          <View style={s.sheetGrabber} />
+        </View>
         <ScrollView
           showsVerticalScrollIndicator={false}
-          bounces={false}
+          bounces={true}
           contentContainerStyle={s.bottomPanelContent}
         >
         <View style={s.infoRow}>
           <View style={s.peerInfo}>
             <Text style={s.peerName}>{peerName}</Text>
-            <Text style={s.peerSub}>
-              {peerLocation ? `Updated ${peerLastSeenText}` : 'Waiting for location...'}
-              {peerMayBeDelayed ? ' • May be delayed by OS power settings' : ''}
-            </Text>
           </View>
-          {routeDistance != null && (
-            <ModernDistanceBar distanceM={routeDistance} maxDistanceM={500} colors={colors} />
-          )}
+          <Text style={s.peerSub}>
+            {peerLocation ? `Updated ${peerLastSeenText}` : 'Waiting for location...'}
+            {peerMayBeDelayed ? ' • May be delayed by OS power settings' : ''}
+          </Text>
         </View>
 
         {(distanceText || durationText) && (
-          <View style={s.statsRow}>
-            {distanceText && (
-              <View style={s.statPill}>
-                <Text style={s.statLabel}>Distance</Text>
-                <Text style={s.statValue}>{distanceText}</Text>
-              </View>
-            )}
-            {durationText && (
-              <View style={s.statPill}>
-                <Text style={s.statLabel}>ETA</Text>
-                <Text style={s.statValue}>{durationText}</Text>
-              </View>
-            )}
+          <View style={s.routeSummary}>
+            <View style={s.routePulse}>
+              <View style={s.routePulseDot} />
+            </View>
+            <View style={s.routeSummaryCopy}>
+              <Text style={s.routeSummaryKicker}>Current route</Text>
+              <Text style={s.routeSummaryTitle}>
+                {durationText ? `${durationText} ETA` : 'ETA pending'}
+              </Text>
+            </View>
+            <View style={s.routeSummaryMode}>
+              <Text style={s.routeSummaryModeIcon}>{selectedTransportMode.icon}</Text>
+            </View>
           </View>
         )}
 
@@ -1508,78 +1773,40 @@ const ActiveSessionScreen = ({ route, navigation }) => {
             </View>
 
             <View style={s.destinationStats}>
-              <DestinationMetric label="You" distance={destinationDistanceText} eta={destinationEtaText} colors={colors} />
-              <DestinationMetric label={peerName} distance={peerDestinationDistanceText} eta={peerDestinationEtaText} colors={colors} muted={!peerLocation} />
+              <DestinationMetric label="You" distance={destinationDistanceText} eta={destinationEtaText} colors={colors} variant="you" mode={selectedTransportMode} />
+              <DestinationMetric label={peerName} distance={peerDestinationDistanceText} eta={peerDestinationEtaText} colors={colors} muted={!peerLocation} variant="friend" mode={peerTransportMode} />
             </View>
 
-            <View style={s.routeLegend}>
-              <View style={s.routeLegendItem}>
-                <View style={[s.routeSample, s.routeSampleSolid]} />
-                <Text style={s.routeLegendText}>Your route</Text>
-              </View>
-              <View style={s.routeLegendItem}>
-                <View style={[s.routeSample, s.routeSampleDashed]} />
-                <Text style={s.routeLegendText}>Friend route</Text>
-              </View>
+            <View style={s.destinationFooter}>
+              <View style={s.destinationFooterDot} />
+              <Text style={s.destinationRouteHint}>
+                {destinationRouteLoading ? 'Updating routes' : destinationRouteDuration ? 'Routes shown on map' : 'Direct line until routing is ready'}
+              </Text>
             </View>
-
-            <Text style={s.destinationRouteHint}>
-              {destinationRouteLoading ? 'Updating routes...' : destinationRouteDuration ? 'Routes shown on map' : 'Direct line shown until routing is available'}
-            </Text>
             {peerMayBeDelayed && <Text style={s.destinationStaleText}>Friend last seen {peerLastSeenText}</Text>}
           </View>
         )}
 
-        <View style={s.controlButtons}>
-          <TouchableOpacity
-            style={[s.controlButton, isSharingPaused && s.controlButtonActive]}
-            onPress={handleTogglePauseSharing}
-          >
-            <Text style={s.controlButtonIcon}>{isSharingPaused ? '▶' : 'Ⅱ'}</Text>
-            <Text style={[s.controlButtonLabel, isSharingPaused && s.controlButtonLabelActive]}>
-              {isSharingPaused ? 'Resume' : 'Pause'}
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={s.controlButton} onPress={handleEndSession}>
-            <Text style={s.controlButtonIcon}>×</Text>
-            <Text style={s.controlButtonLabel}>End</Text>
-          </TouchableOpacity>
-        </View>
-
-        {peerLocation && (
-          <View style={s.modeTabs}>
-            {Object.values(TransportMode).map(mode => (
-              <TouchableOpacity key={mode.id}
-                style={[s.modeTab, selectedMode === mode.id && s.modeTabActive]}
-                onPress={() => setSelectedMode(mode.id)}>
-                <Text style={s.modeIcon}>{mode.icon}</Text>
-                <Text style={[s.modeLabel, selectedMode === mode.id && s.modeLabelActive]}>
-                  {mode.label}
-                </Text>
-                {routeLoading && selectedMode === mode.id && (
-                  <ActivityIndicator size="small" color={colors.textSecondary} style={{ marginLeft: 4 }} />
-                )}
-              </TouchableOpacity>
-            ))}
-          </View>
-        )}
-
-        <TouchableOpacity
-          style={[s.shareInviteButton, isSharingInvite && s.buttonDisabled]}
-          onPress={handleShareInvite}
-          disabled={isSharingInvite || !sessionId}
-        >
-          <Text style={s.shareInviteText}>{isSharingInvite ? 'Preparing Invite...' : 'Share Invite'}</Text>
-        </TouchableOpacity>
-
-        {routeDistance != null && routeDistance <= 50 && (
-          <TouchableOpacity style={s.imHereButton} onPress={handleImHere}>
-            <Text style={s.imHereText}>I'm Here!</Text>
-          </TouchableOpacity>
-        )}
         </ScrollView>
-      </View>
+      </Animated.View>
+
+      {isWithinArrivalRange && !isConfirmingArrival && (
+        <Animated.View style={[s.arrivalActionWrap, { transform: [{ scale: arrivalCtaScale }] }]}>
+          <TouchableOpacity
+            style={s.arrivalAction}
+            activeOpacity={0.88}
+            onPress={() => {
+              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+              handleImHere();
+            }}
+          >
+            <View style={s.arrivalActionPulse}>
+              <View style={s.arrivalActionDot} />
+            </View>
+            <Text style={s.arrivalActionText}>I'm Here</Text>
+          </TouchableOpacity>
+        </Animated.View>
+      )}
 
       {/* Recovery Modal - appears on top of active session when there's a permission/service/network issue */}
       {initIssue && sessionId && (
@@ -1695,21 +1922,34 @@ const makeStyles = (c) => StyleSheet.create({
   initIssueLinkText: { color: c.textMuted, fontWeight: '700', fontSize: 13 },
 
   statusBadge: {
-    position: 'absolute', top: 16, left: 16,
-    paddingHorizontal: 12, paddingVertical: 8,
-    borderRadius: 20, flexDirection: 'row', alignItems: 'center',
-    backgroundColor: c.cardBg, borderWidth: 1, borderColor: c.border,
+    marginTop: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 15,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: c.cardBg,
+    borderWidth: 1,
+    borderColor: c.border,
+    shadowColor: '#000000',
+    shadowOpacity: 0.1,
+    shadowOffset: { width: 0, height: 6 },
+    shadowRadius: 14,
+    elevation: 6,
   },
-  statusConnected: {},
+  statusConnected: {
+    borderColor: 'rgba(52,199,89,0.45)',
+    backgroundColor: 'rgba(255,255,255,0.92)',
+  },
   statusReconnecting: { borderColor: c.warning },
   statusFailed: { borderColor: c.accent },
   statusDisconnected: {},
-  statusDot: { width: 7, height: 7, borderRadius: 4, marginRight: 7 },
-  dotGreen: { backgroundColor: c.online },
+  statusDot: { width: 7, height: 7, borderRadius: 4, marginRight: 6 },
+  dotGreen: { backgroundColor: '#34C759' },
   dotOrange: { backgroundColor: c.warning },
   dotRed: { backgroundColor: c.accent },
   dotGray: { backgroundColor: c.textMuted },
-  statusText: { fontSize: 12, fontWeight: '600', color: c.textPrimary },
+  statusText: { fontSize: 12, fontWeight: '800', color: c.textPrimary },
 
   errorBanner: {
     position: 'absolute', bottom: 130, left: 16, right: 16,
@@ -1749,193 +1989,354 @@ const makeStyles = (c) => StyleSheet.create({
 
   bottomPanel: {
     position: 'absolute',
-    bottom: 32, left: 16, right: 16,
-    backgroundColor: c.surface,
-    borderRadius: Radius.xl,
-    paddingHorizontal: Spacing.lg, paddingTop: Spacing.md, paddingBottom: Spacing.lg,
-    maxHeight: '60%',
-    borderWidth: 1, borderColor: c.border,
-    shadowColor: c.textPrimary,
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.12,
-    shadowRadius: 24,
-    elevation: 10,
+    bottom: 12,
+    left: 12,
+    right: 12,
+    backgroundColor: c.surfaceGlass || c.surface,
+    borderRadius: 26,
+    paddingHorizontal: 14,
+    paddingTop: 8,
+    paddingBottom: 14,
+    borderWidth: 1,
+    borderColor: c.border,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 14 },
+    shadowOpacity: 0.16,
+    shadowRadius: 28,
+    elevation: 12,
+  },
+  sheetGrabberHitArea: {
+    height: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 2,
+  },
+  sheetGrabber: {
+    alignSelf: 'center',
+    width: 38,
+    height: 4,
+    borderRadius: Radius.pill,
+    backgroundColor: c.borderLight,
   },
   bottomPanelContent: {
-    paddingBottom: 2,
+    paddingBottom: 4,
   },
-  infoRow: { flexDirection: 'row', alignItems: 'center', marginBottom: Spacing.md },
-  peerInfo: { flex: 1 },
-  peerName: { ...Font.subtitle, color: c.textPrimary },
-  peerSub: { ...Font.caption, color: c.textMuted, marginTop: 3 },
-  statsRow: {
+  infoRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10, marginBottom: 10 },
+  peerInfo: { flex: 1, minWidth: 92 },
+  peerName: { color: c.textPrimary, fontSize: 20, fontWeight: '900', letterSpacing: -0.2 },
+  peerSub: { color: c.textMuted, fontSize: 11, fontWeight: '800', lineHeight: 14, textAlign: 'right', marginTop: 5, maxWidth: '48%' },
+  routeSummary: {
     flexDirection: 'row',
-    gap: Spacing.sm,
-    marginBottom: Spacing.md,
+    alignItems: 'center',
+    backgroundColor: c.textPrimary,
+    borderWidth: 1,
+    borderColor: c.textPrimary,
+    borderRadius: 20,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    marginBottom: 12,
+    shadowColor: '#000000',
+    shadowOpacity: 0.1,
+    shadowOffset: { width: 0, height: 8 },
+    shadowRadius: 18,
+    elevation: 4,
+  },
+  routePulse: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(255,255,255,0.14)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+  },
+  routePulseDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#34C759',
+    shadowColor: '#34C759',
+    shadowOpacity: 0.6,
+    shadowOffset: { width: 0, height: 0 },
+    shadowRadius: 8,
+  },
+  routeSummaryCopy: {
+    flex: 1,
+  },
+  routeSummaryKicker: {
+    color: 'rgba(255,255,255,0.68)',
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 0.4,
+  },
+  routeSummaryTitle: {
+    color: c.bg,
+    fontSize: 19,
+    fontWeight: '900',
+    letterSpacing: -0.3,
+    marginTop: 2,
+  },
+  routeSummaryMode: {
+    minWidth: 36,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(255,255,255,0.14)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 8,
+  },
+  routeSummaryModeIcon: {
+    fontSize: 17,
   },
   destinationCard: {
     backgroundColor: c.surfaceElevated,
     borderWidth: 1,
     borderColor: c.border,
-    borderRadius: Radius.md,
-    padding: 12,
-    marginBottom: Spacing.md,
+    borderRadius: 24,
+    padding: 14,
+    marginBottom: 12,
+    shadowColor: '#000000',
+    shadowOpacity: 0.05,
+    shadowOffset: { width: 0, height: 8 },
+    shadowRadius: 16,
+    elevation: 2,
   },
   destinationHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 10,
+    marginBottom: 12,
   },
   destinationPin: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     backgroundColor: c.surface,
     borderWidth: 1,
     borderColor: c.border,
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: 10,
+    marginRight: 11,
   },
   destinationPinText: {
     color: c.textPrimary,
     fontSize: 16,
     fontWeight: '900',
   },
-  destinationKicker: { color: c.textMuted, fontSize: 10, fontWeight: '900', marginBottom: 2 },
-  destinationName: { color: c.textPrimary, fontSize: 15, fontWeight: '900' },
-  destinationAddress: { color: c.textSecondary, fontSize: 11, marginTop: 2, lineHeight: 15 },
+  destinationKicker: { color: c.textMuted, fontSize: 10, fontWeight: '900', marginBottom: 2, letterSpacing: 0.5 },
+  destinationName: { color: c.textPrimary, fontSize: 18, fontWeight: '900', letterSpacing: -0.2 },
+  destinationAddress: { color: c.textSecondary, fontSize: 12, marginTop: 3, lineHeight: 16 },
   destinationStats: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  routeLegend: {
-    flexDirection: 'row',
-    gap: 12,
-    marginTop: 10,
-    paddingTop: 10,
-    borderTopWidth: 1,
-    borderTopColor: c.border,
-  },
-  routeLegendItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  routeSample: {
-    width: 24,
-    height: 0,
-    borderTopWidth: 3,
-    marginRight: 6,
-  },
-  routeSampleSolid: {
-    borderTopColor: c.myMarker,
-  },
-  routeSampleDashed: {
-    borderTopColor: c.peerMarker,
-    borderStyle: 'dashed',
-  },
-  routeLegendText: {
-    color: c.textSecondary,
-    fontSize: 11,
-    fontWeight: '800',
-  },
-  destinationRouteHint: { color: c.textMuted, fontSize: 11, fontWeight: '700', marginTop: 8 },
-  destinationStaleText: { color: c.warning, fontSize: 11, fontWeight: '700', marginTop: 5 },
-  controlButtons: {
-    flexDirection: 'row',
-    gap: Spacing.sm,
-    marginBottom: Spacing.md,
-  },
-  controlButton: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: c.surfaceElevated,
+    backgroundColor: c.surface,
     borderWidth: 1,
     borderColor: c.border,
-    borderRadius: Radius.pill,
-    paddingVertical: 12,
+    borderRadius: 20,
+    paddingVertical: 6,
     paddingHorizontal: 10,
+    gap: 4,
   },
-  controlButtonActive: {
+  destinationFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 9,
+    paddingHorizontal: 2,
+  },
+  destinationFooterDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: c.online,
+    marginRight: 7,
+  },
+  destinationRouteHint: { color: c.textMuted, fontSize: 10, fontWeight: '800' },
+  destinationStaleText: { color: c.warning, fontSize: 11, fontWeight: '700', marginTop: 5 },
+  sessionActions: {
+    marginTop: 8,
+    gap: 7,
+    alignItems: 'flex-end',
+  },
+  sessionAction: {
+    width: 42,
+    height: 42,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: c.cardBg,
+    borderWidth: 1,
+    borderColor: c.border,
+    borderRadius: 14,
+    shadowColor: '#000000',
+    shadowOpacity: 0.1,
+    shadowOffset: { width: 0, height: 6 },
+    shadowRadius: 14,
+    elevation: 6,
+  },
+  sessionActionActive: {
     backgroundColor: c.textPrimary,
     borderColor: c.textPrimary,
   },
-  controlButtonIcon: {
-    fontSize: 14,
-    marginRight: 6,
+  sessionActionDanger: {
+    borderColor: c.border,
   },
-  controlButtonLabel: {
-    ...Font.caption,
+  sessionActionIcon: {
+    fontSize: 18,
+    fontWeight: '900',
     color: c.textPrimary,
-    fontWeight: '800',
   },
-  controlButtonLabelActive: {
+  sessionActionLabelActive: {
     color: c.bg,
   },
-  statPill: {
-    flex: 1,
-    backgroundColor: c.surfaceElevated,
-    borderWidth: 1,
-    borderColor: c.border,
-    borderRadius: Radius.md,
-    paddingVertical: 8,
-    paddingHorizontal: 10,
+  sessionActionDangerText: {
+    color: c.accent,
   },
   statLabel: {
     ...Font.caption,
     color: c.textMuted,
     fontSize: 11,
+    fontWeight: '800',
   },
   statValue: {
     color: c.textPrimary,
-    fontSize: 15,
-    fontWeight: '800',
+    fontSize: 21,
+    fontWeight: '900',
     marginTop: 2,
+    letterSpacing: -0.35,
   },
   distanceBadge: { alignItems: 'flex-end' },
   distanceValue: { fontSize: 22, fontWeight: '800', color: c.textPrimary, letterSpacing: -0.5 },
   etaValue: { ...Font.caption, color: c.textMuted, marginTop: 2 },
 
-  modeTabs: {
-    flexDirection: 'row', marginBottom: Spacing.md,
-    backgroundColor: c.surfaceElevated, borderRadius: Radius.pill, padding: 4,
-    borderWidth: 1, borderColor: c.border,
+  mapModeControl: {
+    position: 'absolute',
+    top: Platform.OS === 'ios' ? 76 : 16,
+    right: 16,
+    alignItems: 'flex-end',
+    zIndex: 20,
+    elevation: 20,
   },
-  modeTab: {
-    flex: 1, flexDirection: 'row', alignItems: 'center',
-    justifyContent: 'center', paddingVertical: 8, borderRadius: Radius.pill,
+  mapModeButton: {
+    width: 54,
+    height: 46,
+    borderRadius: 16,
+    backgroundColor: c.cardBg,
+    borderWidth: 1,
+    borderColor: c.border,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000000',
+    shadowOpacity: 0.14,
+    shadowOffset: { width: 0, height: 8 },
+    shadowRadius: 18,
+    elevation: 8,
   },
-  modeTabActive: { backgroundColor: c.textPrimary },
-  modeIcon: { fontSize: 14, marginRight: 5 },
-  modeLabel: { ...Font.caption, color: c.textMuted },
-  modeLabelActive: { color: c.bg, fontWeight: '800' },
+  mapModeIcon: {
+    fontSize: 21,
+    marginRight: 2,
+  },
+  mapModeChevron: {
+    color: c.textSecondary,
+    fontSize: 13,
+    fontWeight: '900',
+    lineHeight: 14,
+    marginTop: 2,
+  },
+  mapDistanceChip: {
+    position: 'absolute',
+    top: Platform.OS === 'ios' ? 78 : 18,
+    right: 86,
+    zIndex: 18,
+    elevation: 18,
+  },
+  modeMenu: {
+    width: 138,
+    marginTop: 8,
+    borderRadius: 18,
+    backgroundColor: c.cardBg,
+    borderWidth: 1,
+    borderColor: c.border,
+    padding: 4,
+    shadowColor: '#000000',
+    shadowOpacity: 0.16,
+    shadowOffset: { width: 0, height: 10 },
+    shadowRadius: 22,
+    elevation: 10,
+  },
+  modeMenuItem: {
+    minHeight: 40,
+    borderRadius: 14,
+    paddingHorizontal: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  modeMenuItemActive: {
+    backgroundColor: c.textPrimary,
+  },
+  modeMenuIcon: {
+    fontSize: 16,
+    marginRight: 9,
+  },
+  modeMenuLabel: {
+    flex: 1,
+    color: c.textSecondary,
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  modeMenuLabelActive: {
+    color: c.bg,
+  },
+  modeMenuCheck: {
+    color: c.bg,
+    fontSize: 13,
+    fontWeight: '900',
+  },
 
   mapLoading: {
     ...StyleSheet.absoluteFillObject, justifyContent: 'center',
     alignItems: 'center', backgroundColor: c.bg,
   },
-  imHereButton: {
-    backgroundColor: c.textPrimary,
-    borderRadius: Radius.pill, paddingVertical: 14,
-    alignItems: 'center', justifyContent: 'center',
-    marginBottom: Spacing.sm, shadowColor: c.textPrimary,
-    shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8, elevation: 4,
+  arrivalActionWrap: {
+    position: 'absolute',
+    left: 24,
+    right: 24,
+    bottom: Platform.OS === 'ios' ? 28 : 20,
+    zIndex: 35,
+    elevation: 35,
   },
-  imHereText: { color: c.bg, fontSize: 16, fontWeight: '800' },
-  shareInviteButton: {
-    backgroundColor: c.surfaceElevated,
-    borderWidth: 1,
-    borderColor: c.border,
-    borderRadius: Radius.pill,
-    paddingVertical: 14,
+  arrivalAction: {
+    minHeight: 58,
+    backgroundColor: c.textPrimary,
+    borderRadius: 22,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: Spacing.sm,
+    flexDirection: 'row',
+    shadowColor: c.textPrimary,
+    shadowOffset: { width: 0, height: 14 },
+    shadowOpacity: 0.28,
+    shadowRadius: 22,
+    elevation: 12,
   },
-  shareInviteText: { color: c.textPrimary, fontSize: 15, fontWeight: '700', letterSpacing: 0.2 },
+  arrivalActionPulse: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: 'rgba(52,199,89,0.22)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+  },
+  arrivalActionDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#34C759',
+  },
+  arrivalActionText: {
+    color: c.bg,
+    fontSize: 17,
+    fontWeight: '900',
+    letterSpacing: -0.1,
+  },
   endSessionButton: {
     borderWidth: 1, borderColor: c.accent,
     borderRadius: Radius.pill, paddingVertical: 14,
@@ -1956,28 +2357,116 @@ const makeStyles = (c) => StyleSheet.create({
   successText: { fontSize: 16, color: c.textSecondary, fontWeight: '500' },
 });
 
-const DestinationMetric = ({ label, distance, eta, colors, muted }) => (
-  <View style={{
-    flex: 1,
-    minWidth: 120,
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: Radius.sm,
-    paddingVertical: 10,
-    paddingHorizontal: 10,
-    opacity: muted ? 0.65 : 1,
-  }}>
-    <Text style={{ color: colors.textMuted, fontSize: 10, fontWeight: '900', marginBottom: 4 }} numberOfLines={1}>
-      {label}
-    </Text>
-    <Text style={{ color: colors.textPrimary, fontSize: 15, fontWeight: '900' }}>
-      {distance || 'Waiting'}
-    </Text>
-    <Text style={{ color: colors.textSecondary, fontSize: 11, fontWeight: '700', marginTop: 2 }}>
-      {eta || 'ETA pending'}
-    </Text>
-  </View>
+const DestinationMetric = ({ label, distance, eta, colors, muted, variant, mode }) => {
+  const isFriend = variant === 'friend';
+  const routeColor = isFriend ? colors.peerMarker : colors.myMarker;
+  const dashSegments = [0, 1, 2, 3, 4, 5, 6, 7];
+  return (
+    <View style={{
+      minHeight: 46,
+      flexDirection: 'row',
+      alignItems: 'center',
+      opacity: muted ? 0.55 : 1,
+    }}>
+      <View style={{
+        width: 78,
+        flexDirection: 'row',
+        alignItems: 'center',
+      }}>
+        <View style={{
+          width: 9,
+          height: 9,
+          borderRadius: 5,
+          backgroundColor: routeColor,
+          opacity: isFriend ? 0.55 : 1,
+          marginRight: 8,
+        }} />
+        <Text style={{ color: colors.textPrimary, fontSize: 12, fontWeight: '900' }} numberOfLines={1}>
+          {label}
+        </Text>
+      </View>
+
+      <View style={{
+        flex: 1,
+        height: 16,
+        justifyContent: 'center',
+        marginRight: 10,
+      }}>
+        {isFriend ? (
+          <View style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            opacity: 0.42,
+          }}>
+            {dashSegments.map(segment => (
+              <View
+                key={segment}
+                style={{
+                  flex: 1,
+                  height: 3,
+                  borderRadius: 2,
+                  backgroundColor: routeColor,
+                  marginRight: segment === dashSegments.length - 1 ? 0 : 5,
+                }}
+              />
+            ))}
+          </View>
+        ) : (
+          <View style={{
+            height: 3,
+            borderRadius: 2,
+            backgroundColor: routeColor,
+            opacity: 0.95,
+          }} />
+        )}
+        <View style={{
+          position: 'absolute',
+          right: 0,
+          width: 9,
+          height: 9,
+          borderRadius: 5,
+          backgroundColor: colors.surface,
+          borderWidth: 2,
+          borderColor: routeColor,
+        }} />
+      </View>
+
+      <View style={{ minWidth: 86, alignItems: 'flex-end' }}>
+        <Text style={{ color: colors.textPrimary, fontSize: 17, fontWeight: '900', letterSpacing: -0.25 }}>
+          {distance || 'Waiting'}
+        </Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 2 }}>
+          {!!mode?.icon && (
+            <Text style={{ fontSize: 10, marginRight: 4 }}>
+              {mode.icon}
+            </Text>
+          )}
+          <Text style={{ color: colors.textSecondary, fontSize: 11, fontWeight: '800' }}>
+            {eta || 'ETA pending'}
+          </Text>
+        </View>
+      </View>
+    </View>
+  );
+};
+
+const ShareNetworkIcon = ({ color }) => (
+  <Svg width={22} height={22} viewBox="0 0 24 24">
+    <Path
+      d="M3.6 11.2L20.2 4.2C20.8 3.95 21.42 4.55 21.18 5.16L14.38 20.9C14.08 21.58 13.1 21.5 12.93 20.78L11.18 13.3L3.82 12.66C3.08 12.6 2.9 11.5 3.6 11.2Z"
+      fill="none"
+      stroke={color}
+      strokeWidth="2.2"
+      strokeLinejoin="round"
+    />
+    <Path
+      d="M11.28 13.18L20.78 4.58"
+      fill="none"
+      stroke={color}
+      strokeWidth="2.2"
+      strokeLinecap="round"
+    />
+  </Svg>
 );
 
 export default ActiveSessionScreen;

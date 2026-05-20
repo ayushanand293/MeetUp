@@ -222,9 +222,11 @@ const AcceptRequestScreen = ({ route, navigation }) => {
 
             {requests.length === 0 ? (
                 <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingBottom: 80 }}>
-                    <Text style={{ fontSize: 52, color: colors.textMuted, marginBottom: Spacing.md }}>◎</Text>
+                    <View style={{ width: 76, height: 76, borderRadius: 26, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center', marginBottom: Spacing.md }}>
+                        <Text style={{ fontSize: 34, color: colors.textPrimary, fontWeight: '900' }}>○</Text>
+                    </View>
                     <Text style={[Font.subtitle, { color: colors.textPrimary, marginBottom: 6 }]}>All clear</Text>
-                    <Text style={[Font.body, { color: colors.textSecondary }]}>No pending requests</Text>
+                    <Text style={[Font.body, { color: colors.textSecondary, textAlign: 'center' }]}>Incoming invites will land here.</Text>
                 </View>
             ) : (
                 <FlatList data={prioritizedRequests} keyExtractor={item => item.id} showsVerticalScrollIndicator={false}
@@ -260,19 +262,19 @@ const RequestCard = ({ item, index, colors, accepting, onAccept, onDecline, link
             opacity,
             transform: [{ translateY }],
             backgroundColor: colors.surface,
-            borderRadius: Radius.md,
+            borderRadius: 24,
             padding: Spacing.md,
             borderWidth: 1,
             borderColor: linked ? colors.textPrimary : colors.border,
             shadowColor: colors.textPrimary,
-            shadowOpacity: 0.06,
-            shadowOffset: { width: 0, height: 6 },
-            shadowRadius: 10,
-            elevation: 2,
+            shadowOpacity: 0.07,
+            shadowOffset: { width: 0, height: 10 },
+            shadowRadius: 18,
+            elevation: 4,
         }}>
             <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: Spacing.md }}>
-                <View style={{ width: 46, height: 46, borderRadius: 23, backgroundColor: colors.surfaceElevated, borderWidth: 1, borderColor: colors.border, justifyContent: 'center', alignItems: 'center', marginRight: 12 }}>
-                    <Text style={{ color: colors.textPrimary, fontWeight: '700', fontSize: 18 }}>{initials}</Text>
+                <View style={{ width: 46, height: 46, borderRadius: 16, backgroundColor: colors.textPrimary, borderWidth: 1, borderColor: colors.textPrimary, justifyContent: 'center', alignItems: 'center', marginRight: 12 }}>
+                    <Text style={{ color: colors.bg, fontWeight: '900', fontSize: 18 }}>{initials}</Text>
                 </View>
                 <View style={{ flex: 1 }}>
                     <Text style={[Font.label, { color: colors.textMuted, marginBottom: 3 }]}>Wants to meet</Text>
@@ -337,7 +339,7 @@ const RequestCard = ({ item, index, colors, accepting, onAccept, onDecline, link
             )}
             <View style={{ flexDirection: 'row', gap: 8 }}>
                 <ActionBtn label="Decline" onPress={onDecline} colors={colors} type="secondary" />
-                <ActionBtn label="Accept" onPress={onAccept} colors={colors} type="primary" loading={accepting} disabled={accepting} />
+                <ActionBtn label="Accept & Open Map" onPress={onAccept} colors={colors} type="primary" loading={accepting} disabled={accepting} />
             </View>
         </Animated.View>
     );

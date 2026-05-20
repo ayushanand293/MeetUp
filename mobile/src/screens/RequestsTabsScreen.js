@@ -22,7 +22,6 @@ const RequestsTabsScreen = ({ route, navigation }) => {
     const outgoingPendingCountRef = useRef(0);
     const acceptanceAutoJoinSessionRef = useRef(null);
     const awaitingSenderJoinRef = useRef(false);
-    const ambient = useRef(new Animated.Value(0)).current;
 
     const fetchRequests = useCallback(async (silent = false) => {
         if (!silent) setLoading(true);
@@ -119,18 +118,6 @@ const RequestsTabsScreen = ({ route, navigation }) => {
     }, [route.params?.activeTab]);
 
     useEffect(() => {
-        const loop = Animated.loop(
-            Animated.sequence([
-                Animated.timing(ambient, { toValue: 1, duration: 2800, useNativeDriver: true }),
-                Animated.timing(ambient, { toValue: 0, duration: 2800, useNativeDriver: true }),
-            ])
-        );
-
-        loop.start();
-        return () => loop.stop();
-    }, [ambient]);
-
-    useEffect(() => {
         if (!linkedRequestId || loading) return;
         analyticsService.track('linked_request_resolved', {
             requestId: linkedRequestId,
@@ -189,21 +176,6 @@ const RequestsTabsScreen = ({ route, navigation }) => {
 
     return (
         <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }} edges={['top']}>
-            <Animated.View
-                pointerEvents="none"
-                style={{
-                    position: 'absolute',
-                    width: 220,
-                    height: 220,
-                    borderRadius: 110,
-                    top: -60,
-                    right: -50,
-                    backgroundColor: colors.surfaceElevated,
-                    opacity: 0.46,
-                    transform: [{ translateY: ambient.interpolate({ inputRange: [0, 1], outputRange: [0, -12] }) }],
-                }}
-            />
-
             <View style={{ flex: 1, padding: Spacing.lg }}>
                 {/* Header */}
                 <View style={{ marginBottom: Spacing.md, paddingTop: Spacing.md }}>
@@ -217,17 +189,15 @@ const RequestsTabsScreen = ({ route, navigation }) => {
                 </View>
 
                 {/* Tab Switcher */}
-                <View style={{ flexDirection: 'row', marginBottom: Spacing.md, gap: Spacing.sm }}>
+                <View style={{ flexDirection: 'row', marginBottom: Spacing.md, gap: Spacing.sm, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, borderRadius: 20, padding: 4 }}>
                     <TouchableOpacity
                         onPress={() => setActiveTab('incoming')}
                         style={{
                             flex: 1,
-                            paddingVertical: 10,
+                            paddingVertical: 11,
                             paddingHorizontal: 12,
-                            borderRadius: Radius.md,
+                            borderRadius: 16,
                             backgroundColor: activeTab === 'incoming' ? colors.textPrimary : colors.surface,
-                            borderWidth: 1,
-                            borderColor: activeTab === 'incoming' ? colors.textPrimary : colors.border,
                         }}
                     >
                         <Text
@@ -245,12 +215,10 @@ const RequestsTabsScreen = ({ route, navigation }) => {
                         onPress={() => setActiveTab('outgoing')}
                         style={{
                             flex: 1,
-                            paddingVertical: 10,
+                            paddingVertical: 11,
                             paddingHorizontal: 12,
-                            borderRadius: Radius.md,
+                            borderRadius: 16,
                             backgroundColor: activeTab === 'outgoing' ? colors.textPrimary : colors.surface,
-                            borderWidth: 1,
-                            borderColor: activeTab === 'outgoing' ? colors.textPrimary : colors.border,
                         }}
                     >
                         <Text
@@ -321,12 +289,14 @@ const RequestsTabsScreen = ({ route, navigation }) => {
                 {/* Request List */}
                 {requests.length === 0 ? (
                     <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingBottom: 80 }}>
-                        <Text style={{ fontSize: 52, color: colors.textMuted, marginBottom: Spacing.md }}>◎</Text>
+                        <View style={{ width: 76, height: 76, borderRadius: 26, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center', marginBottom: Spacing.md }}>
+                            <Text style={{ fontSize: 34, color: colors.textPrimary, fontWeight: '900' }}>{activeTab === 'incoming' ? '○' : '⧗'}</Text>
+                        </View>
                         <Text style={[Font.subtitle, { color: colors.textPrimary, marginBottom: 6 }]}>
                             {activeTab === 'incoming' ? 'All clear' : 'No pending requests'}
                         </Text>
-                        <Text style={[Font.body, { color: colors.textSecondary }]}>
-                            {activeTab === 'incoming' ? 'No incoming requests' : 'You haven\'t sent any requests yet'}
+                        <Text style={[Font.body, { color: colors.textSecondary, textAlign: 'center' }]}>
+                            {activeTab === 'incoming' ? 'Incoming invites will land here.' : 'Requests you send will wait here until accepted.'}
                         </Text>
                     </View>
                 ) : (
@@ -381,20 +351,20 @@ const IncomingRequestCard = ({ item, index, colors, accepting, onAccept, onDecli
             opacity,
             transform: [{ translateY }],
             backgroundColor: colors.surface,
-            borderRadius: Radius.md,
+            borderRadius: 24,
             padding: Spacing.md,
             marginBottom: Spacing.sm,
             borderWidth: 1,
             borderColor: linked ? colors.textPrimary : colors.border,
             shadowColor: colors.textPrimary,
-            shadowOpacity: 0.06,
-            shadowOffset: { width: 0, height: 6 },
-            shadowRadius: 10,
-            elevation: 2,
+            shadowOpacity: 0.07,
+            shadowOffset: { width: 0, height: 10 },
+            shadowRadius: 18,
+            elevation: 4,
         }}>
             <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: Spacing.md }}>
-                <View style={{ width: 46, height: 46, borderRadius: 23, backgroundColor: colors.surfaceElevated, borderWidth: 1, borderColor: colors.border, justifyContent: 'center', alignItems: 'center', marginRight: 12 }}>
-                    <Text style={{ color: colors.textPrimary, fontWeight: '700', fontSize: 18 }}>{initials}</Text>
+                <View style={{ width: 46, height: 46, borderRadius: 16, backgroundColor: colors.textPrimary, borderWidth: 1, borderColor: colors.textPrimary, justifyContent: 'center', alignItems: 'center', marginRight: 12 }}>
+                    <Text style={{ color: colors.bg, fontWeight: '900', fontSize: 18 }}>{initials}</Text>
                 </View>
                 <View style={{ flex: 1 }}>
                     <Text style={[Font.label, { color: colors.textMuted, marginBottom: 3 }]}>Wants to meet</Text>
@@ -459,7 +429,7 @@ const IncomingRequestCard = ({ item, index, colors, accepting, onAccept, onDecli
             )}
             <View style={{ flexDirection: 'row', gap: 8 }}>
                 <ActionBtn label="Decline" onPress={onDecline} colors={colors} type="secondary" />
-                <ActionBtn label="Accept" onPress={onAccept} colors={colors} type="primary" loading={accepting} disabled={accepting} />
+                <ActionBtn label="Accept & Open Map" onPress={onAccept} colors={colors} type="primary" loading={accepting} disabled={accepting} />
             </View>
         </Animated.View>
     );
@@ -553,20 +523,20 @@ const OutgoingRequestCard = ({ item, index, colors }) => {
             opacity,
             transform: [{ translateY }],
             backgroundColor: colors.surface,
-            borderRadius: Radius.lg,
+            borderRadius: 24,
             padding: Spacing.md,
             marginBottom: Spacing.sm,
             borderWidth: 1,
             borderColor: colors.border,
             shadowColor: colors.textPrimary,
-            shadowOpacity: 0.06,
-            shadowOffset: { width: 0, height: 6 },
-            shadowRadius: 10,
-            elevation: 2,
+            shadowOpacity: 0.07,
+            shadowOffset: { width: 0, height: 10 },
+            shadowRadius: 18,
+            elevation: 4,
         }}>
             <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: Spacing.md }}>
-                <View style={{ width: 46, height: 46, borderRadius: 23, backgroundColor: colors.surfaceElevated, borderWidth: 1, borderColor: colors.border, justifyContent: 'center', alignItems: 'center', marginRight: 12 }}>
-                    <Text style={{ color: colors.textPrimary, fontWeight: '700', fontSize: 18 }}>{initials}</Text>
+                <View style={{ width: 46, height: 46, borderRadius: 16, backgroundColor: colors.surfaceElevated, borderWidth: 1, borderColor: colors.border, justifyContent: 'center', alignItems: 'center', marginRight: 12 }}>
+                    <Text style={{ color: colors.textPrimary, fontWeight: '900', fontSize: 18 }}>{initials}</Text>
                 </View>
                 <View style={{ flex: 1 }}>
                     <Text style={[Font.subtitle, { color: colors.textPrimary, fontSize: 15 }]}>{item.receiver_name}</Text>

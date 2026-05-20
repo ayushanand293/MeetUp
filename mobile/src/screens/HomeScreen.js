@@ -12,6 +12,13 @@ import { useTheme, Spacing, Radius, Font, anim } from '../theme';
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const TIMELINE_ITEM_WIDTH = Math.max(132, Math.floor((SCREEN_WIDTH - 92) / 2));
 
+const formatStoryTitle = (item) => {
+    const friendName = item?.co_participant_name || 'Friend';
+    const placeName = item?.destination?.name;
+    if (placeName) return `Met ${friendName} at ${placeName}`;
+    return `Met ${friendName}`;
+};
+
 const HomeScreen = ({ navigation, route }) => {
     const { colors } = useTheme();
     const { user, activeSessionHint, clearActiveSessionHint } = useAuth();
@@ -255,10 +262,12 @@ const HomeScreen = ({ navigation, route }) => {
     const displayName = user?.display_name || user?.phone_e164 || 'You';
     const ambientUp = ambientFloat.interpolate({ inputRange: [0, 1], outputRange: [0, -14] });
     const ambientDown = ambientFloat.interpolate({ inputRange: [0, 1], outputRange: [0, 12] });
+    const liveGreen = '#34C759';
 
     const timelineStories = useMemo(() => {
         return history.filter((item) => !!item.co_participant_name).slice(0, 16);
     }, [history]);
+    const latestStory = timelineStories[0] || null;
 
     const timelineDisplay = useMemo(() => {
         return [
@@ -391,11 +400,11 @@ const HomeScreen = ({ navigation, route }) => {
                     <TouchableOpacity
                         style={{
                             backgroundColor: colors.surface,
-                            borderRadius: Radius.lg,
-                            padding: Spacing.lg,
+                            borderRadius: 24,
+                            padding: 14,
                             borderWidth: 1,
-                            borderColor: colors.border,
-                            shadowColor: colors.textPrimary,
+                            borderColor: 'rgba(52,199,89,0.34)',
+                            shadowColor: liveGreen,
                             shadowOpacity: 0.1,
                             shadowOffset: { width: 0, height: 10 },
                             shadowRadius: 18,
@@ -414,24 +423,55 @@ const HomeScreen = ({ navigation, route }) => {
                                     : undefined,
                             });
                         }}>
-                        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-                            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                                <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: colors.textPrimary, marginRight: 8 }} />
-                                <Text style={[Font.label, { color: colors.textPrimary }]}>LIVE</Text>
+                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                            <View style={{
+                                width: 44,
+                                height: 44,
+                                borderRadius: 16,
+                                backgroundColor: 'rgba(52,199,89,0.12)',
+                                borderWidth: 1,
+                                borderColor: 'rgba(52,199,89,0.28)',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                marginRight: 12,
+                            }}>
+                                <View style={{
+                                    width: 12,
+                                    height: 12,
+                                    borderRadius: 6,
+                                    backgroundColor: liveGreen,
+                                    shadowColor: liveGreen,
+                                    shadowOpacity: 0.75,
+                                    shadowRadius: 8,
+                                    shadowOffset: { width: 0, height: 0 },
+                                }} />
+                            </View>
+                            <View style={{ flex: 1 }}>
+                                <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 3 }}>
+                                    <Text style={{ color: liveGreen, fontSize: 10, fontWeight: '900', letterSpacing: 0.8, marginRight: 7 }}>LIVE</Text>
+                                    <View style={{ width: 1, height: 10, backgroundColor: colors.border, marginRight: 7 }} />
+                                    <Text style={{ color: colors.textMuted, fontSize: 10, fontWeight: '800' }}>Location sharing</Text>
+                                </View>
+                                <Text numberOfLines={1} style={{ color: colors.textPrimary, fontSize: 17, fontWeight: '900', letterSpacing: -0.25 }}>
+                                    {displayActiveSession.peer_name || 'Friend'} is on the map
+                                </Text>
+                                <Text style={{ color: colors.textSecondary, fontSize: 12, fontWeight: '700', marginTop: 2 }}>
+                                    Tap to rejoin
+                                </Text>
                             </View>
                             <View style={{
+                                width: 32,
+                                height: 32,
+                                borderRadius: 12,
+                                backgroundColor: colors.surfaceElevated,
                                 borderWidth: 1,
                                 borderColor: colors.border,
-                                backgroundColor: colors.surfaceElevated,
-                                borderRadius: Radius.pill,
-                                paddingHorizontal: 9,
-                                paddingVertical: 4,
+                                alignItems: 'center',
+                                justifyContent: 'center',
                             }}>
-                                <Text style={{ color: colors.textSecondary, fontSize: 10, fontWeight: '700', letterSpacing: 0.4 }}>ACTIVE</Text>
+                                <Text style={{ color: colors.textPrimary, fontSize: 17, fontWeight: '900' }}>›</Text>
                             </View>
                         </View>
-                        <Text style={[Font.subtitle, { color: colors.textPrimary, marginBottom: 2 }]}>Active Session</Text>
-                        <Text style={[Font.body, { color: colors.textSecondary, fontSize: 13 }]}>Tap to rejoin the map</Text>
                     </TouchableOpacity>
                 </View>
             )}
@@ -482,17 +522,57 @@ const HomeScreen = ({ navigation, route }) => {
                         style={{
                             backgroundColor: colors.surface,
                             borderWidth: 1,
-                            borderColor: colors.textPrimary,
-                            borderRadius: Radius.md,
-                            padding: Spacing.md,
+                            borderColor: colors.border,
+                            borderRadius: 22,
+                            padding: 14,
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            shadowColor: colors.textPrimary,
+                            shadowOpacity: 0.06,
+                            shadowOffset: { width: 0, height: 10 },
+                            shadowRadius: 18,
+                            elevation: 4,
                         }}
                         onPress={() => navigation.navigate('RequestsTabs', { activeTab: 'incoming' })}>
-                        <Text style={{ color: colors.textPrimary, fontWeight: '800', marginBottom: 4 }}>
-                            You have {incomingPending.length} incoming request{incomingPending.length > 1 ? 's' : ''}
-                        </Text>
-                        <Text style={{ color: colors.textSecondary, fontSize: 13 }}>
-                            Tap to accept or decline now.
-                        </Text>
+                        <View style={{
+                            width: 44,
+                            height: 44,
+                            borderRadius: 16,
+                            backgroundColor: colors.textPrimary,
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            marginRight: 12,
+                        }}>
+                            <Text style={{ color: colors.bg, fontSize: 18, fontWeight: '900' }}>
+                                {(incomingPending[0]?.sender_name || incomingPending[0]?.requester_name || 'R')[0].toUpperCase()}
+                            </Text>
+                        </View>
+                        <View style={{ flex: 1 }}>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 3 }}>
+                                <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: '#B1121B', marginRight: 6 }} />
+                                <Text style={{ color: colors.textMuted, fontSize: 10, fontWeight: '900', letterSpacing: 0.7 }}>
+                                    REQUEST
+                                </Text>
+                            </View>
+                            <Text numberOfLines={1} style={{ color: colors.textPrimary, fontSize: 16, fontWeight: '900', letterSpacing: -0.2 }}>
+                                {incomingPending.length === 1 ? `${incomingPending[0]?.sender_name || incomingPending[0]?.requester_name || 'Someone'} wants to meet` : `${incomingPending.length} incoming requests`}
+                            </Text>
+                            <Text style={{ color: colors.textSecondary, fontSize: 12, fontWeight: '700', marginTop: 2 }}>
+                                Review and respond
+                            </Text>
+                        </View>
+                        <View style={{
+                            width: 32,
+                            height: 32,
+                            borderRadius: 12,
+                            backgroundColor: colors.surfaceElevated,
+                            borderWidth: 1,
+                            borderColor: colors.border,
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                        }}>
+                            <Text style={{ color: colors.textPrimary, fontSize: 17, fontWeight: '900' }}>›</Text>
+                        </View>
                     </TouchableOpacity>
                 </Animated.View>
             )}
@@ -518,11 +598,11 @@ const HomeScreen = ({ navigation, route }) => {
                     <View style={{ width: 5, height: 5, borderRadius: 3, backgroundColor: colors.textMuted, marginRight: 6 }} />
                     <Text style={[Font.label, { color: colors.textMuted }]}>ACTIONS</Text>
                 </View>
-                <ActionCard icon="↺" title="Quick Friends" sub="Meet previous friends in one tap" colors={colors}
+                <ActionCard icon="↺" title="Quick Friends" sub="Meet previous friends in one tap" accent="warm" colors={colors}
                     onPress={() => navigation.navigate('QuickFriends')} />
-                <ActionCard icon="+" title="Find a Friend" sub="Search by name, send a meet request" colors={colors}
+                <ActionCard icon="+" title="Find a Friend" sub="Search by name, send a meet request" accent="primary" colors={colors}
                     onPress={() => navigation.navigate('FriendList')} />
-                <ActionCard icon="○" title="Your Requests" sub="Show incoming and waiting requests" colors={colors}
+                <ActionCard icon="○" title="Your Requests" sub="Show incoming and waiting requests" accent="quiet" colors={colors}
                     onPress={() => navigation.navigate('RequestsTabs')} />
             </Animated.View>
 
@@ -542,10 +622,45 @@ const HomeScreen = ({ navigation, route }) => {
                         borderWidth: 1,
                         borderColor: colors.border,
                         borderRadius: Radius.md,
-                        paddingTop: 18,
+                        paddingTop: latestStory ? 14 : 18,
                         paddingBottom: 2,
                         overflow: 'hidden',
                     }}>
+                        {!!latestStory && (
+                            <View style={{
+                                marginHorizontal: Spacing.md,
+                                marginBottom: 14,
+                                padding: 12,
+                                borderRadius: 18,
+                                backgroundColor: colors.surfaceElevated,
+                                borderWidth: 1,
+                                borderColor: colors.border,
+                                flexDirection: 'row',
+                                alignItems: 'center',
+                            }}>
+                                <View style={{
+                                    width: 38,
+                                    height: 38,
+                                    borderRadius: 19,
+                                    backgroundColor: colors.textPrimary,
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    marginRight: 10,
+                                }}>
+                                    <Text style={{ color: colors.bg, fontSize: 15, fontWeight: '900' }}>
+                                        {(latestStory.co_participant_name || '?')[0].toUpperCase()}
+                                    </Text>
+                                </View>
+                                <View style={{ flex: 1 }}>
+                                    <Text numberOfLines={1} style={{ color: colors.textPrimary, fontSize: 15, fontWeight: '900', letterSpacing: -0.2 }}>
+                                        {formatStoryTitle(latestStory)}
+                                    </Text>
+                                    <Text style={{ color: colors.textMuted, fontSize: 11, fontWeight: '700', marginTop: 3 }}>
+                                        {getTimelineMeta(latestStory.ended_at).ago}
+                                    </Text>
+                                </View>
+                            </View>
+                        )}
                         <ScrollView
                             horizontal
                             showsHorizontalScrollIndicator={false}
@@ -653,7 +768,7 @@ const HomeScreen = ({ navigation, route }) => {
                         <Text
                             numberOfLines={1}
                             style={[Font.subtitle, { color: colors.textPrimary, fontSize: 12, marginBottom: 1, fontWeight: isLead ? '800' : '700' }]}>
-                            Met {item.co_participant_name}
+                            {formatStoryTitle(item)}
                         </Text>
                         <Text style={[Font.caption, { color: isLead ? colors.textPrimary : colors.textSecondary, fontSize: 10 }]}>{meta.ago}</Text>
                     </>
@@ -665,8 +780,19 @@ const HomeScreen = ({ navigation, route }) => {
 
 
 
-const ActionCard = ({ icon, title, sub, colors, onPress }) => {
+const ActionCard = ({ icon, title, sub, colors, onPress, accent = 'quiet' }) => {
     const scale = useRef(new Animated.Value(1)).current;
+    const accentColor = accent === 'primary'
+        ? colors.textPrimary
+        : accent === 'warm'
+            ? '#B1121B'
+            : colors.textSecondary;
+    const accentBg = accent === 'primary'
+        ? colors.textPrimary
+        : accent === 'warm'
+            ? 'rgba(177,18,27,0.10)'
+            : colors.surfaceElevated;
+    const iconColor = accent === 'primary' ? colors.bg : accentColor;
     return (
         <Animated.View style={{ transform: [{ scale }] }}>
             <TouchableOpacity
@@ -674,30 +800,30 @@ const ActionCard = ({ icon, title, sub, colors, onPress }) => {
                     flexDirection: 'row',
                     alignItems: 'center',
                     backgroundColor: colors.surface,
-                    borderRadius: Radius.lg,
+                    borderRadius: 22,
                     padding: Spacing.md,
                     marginBottom: Spacing.sm,
                     borderWidth: 1,
                     borderColor: colors.border,
                     shadowColor: colors.textPrimary,
-                    shadowOpacity: 0.07,
-                    shadowOffset: { width: 0, height: 8 },
-                    shadowRadius: 12,
-                    elevation: 3,
+                    shadowOpacity: 0.06,
+                    shadowOffset: { width: 0, height: 10 },
+                    shadowRadius: 18,
+                    elevation: 4,
                 }}
                 onPress={onPress} onPressIn={() => anim.pressIn(scale)} onPressOut={() => anim.pressOut(scale)}>
                 <View style={{
                     width: 42,
                     height: 42,
-                    borderRadius: 21,
-                    backgroundColor: colors.surfaceElevated,
+                    borderRadius: 16,
+                    backgroundColor: accentBg,
                     borderWidth: 1,
-                    borderColor: colors.border,
+                    borderColor: accent === 'warm' ? 'rgba(177,18,27,0.18)' : colors.border,
                     alignItems: 'center',
                     justifyContent: 'center',
                     marginRight: 12,
                 }}>
-                    <Text style={{ fontSize: 20, color: colors.textPrimary, fontWeight: '700' }}>{icon}</Text>
+                    <Text style={{ fontSize: 20, color: iconColor, fontWeight: '900' }}>{icon}</Text>
                 </View>
                 <View style={{ flex: 1 }}>
                     <Text style={[Font.subtitle, { color: colors.textPrimary, fontSize: 16 }]}>{title}</Text>
@@ -706,11 +832,12 @@ const ActionCard = ({ icon, title, sub, colors, onPress }) => {
                 <View style={{
                     width: 30,
                     height: 30,
-                    borderRadius: 15,
+                    borderRadius: 12,
                     alignItems: 'center',
                     justifyContent: 'center',
                     borderWidth: 1,
                     borderColor: colors.border,
+                    backgroundColor: colors.surfaceElevated,
                 }}>
                     <Text style={{ color: colors.textPrimary, fontSize: 16, fontWeight: '700' }}>›</Text>
                 </View>

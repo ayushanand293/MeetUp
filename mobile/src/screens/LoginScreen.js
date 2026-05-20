@@ -176,7 +176,7 @@ const LoginScreen = ({ navigation }) => {
 
   return (
     <View
-      style={[styles.root, { backgroundColor: isDark ? '#0A0A0A' : colors.bg }]}
+      style={[styles.root, { backgroundColor: colors.bg }]}
       onTouchStart={handleTouch}
       onTouchMove={handleTouch}
       onTouchEnd={handleTouchEnd}
@@ -212,7 +212,7 @@ const LoginScreen = ({ navigation }) => {
                 <Text style={[styles.heroTitle, { color: isDark ? '#FFFFFF' : colors.textPrimary }]}>
                   Login
                 </Text>
-                <Text style={[styles.heroSubtitle, { color: isDark ? 'rgba(255,255,255,0.55)' : colors.textSecondary }]}>
+                <Text style={[styles.heroSubtitle, { color: colors.textSecondary }]}>
                   Enter your phone number to continue
                 </Text>
               </Animated.View>
