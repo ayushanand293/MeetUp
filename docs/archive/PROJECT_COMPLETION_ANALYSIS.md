@@ -33,7 +33,7 @@ Over 50% of the 8-week plan is finished. All foundational infrastructure, realti
 **Backend Deliverables**:
 - [x] Monorepo layout (`/backend`, `/mobile`, `/web`, `/infra`)
 - [x] Docker-compose with Postgres + PostGIS, Redis, API, Realtime Gateway, Worker
-- [x] Supabase Auth JWT integration (supports ES256 + HS256)
+- [x] Legacy Auth Auth JWT integration (supports ES256 + HS256)
 - [x] Database schema (users, friends, meet_requests, sessions, session_participants, audit_events)
 - [x] Request/Session state machine (PENDING → ACCEPTED → ACTIVE → ENDED)
 - [x] Session end reasons (USER_ENDED, EXPIRED, PROXIMITY_REACHED)
@@ -41,7 +41,7 @@ Over 50% of the 8-week plan is finished. All foundational infrastructure, realti
 
 **Mobile Deliverables**:
 - [x] React Native/Expo scaffold with navigation
-- [x] Supabase Auth (login, logout, session persistence)
+- [x] Legacy Auth Auth (login, logout, session persistence)
 - [x] Friend list screen + Request screen
 - [x] Accept request flow
 
@@ -173,7 +173,7 @@ Over 50% of the 8-week plan is finished. All foundational infrastructure, realti
    - File: `mobile/src/screens/ActiveSessionScreen.js`
 
 **Web Fallback** (✅ COMPLETE - 9 March 2026):
-- ✅ Full React + Vite web app with Supabase Auth
+- ✅ Full React + Vite web app with Legacy Auth Auth
 - ✅ Snapshot polling every 2 seconds (HTTP fallback)
 - ✅ Live Leaflet.js map with peer markers + accuracy circles
 - ✅ Pause/Resume polling controls
@@ -411,7 +411,7 @@ TEST SUMMARY (Execution: 9 March 2026)
 | Component | Status | Notes |
 |-----------|--------|-------|
 | **Architecture** | ✅ Complete | Monorepo, Docker, schema all designed |
-| **Authentication** | ✅ Complete | Supabase JWT, both ES256 + HS256 |
+| **Authentication** | ✅ Complete | Legacy Auth JWT, both ES256 + HS256 |
 | **Request/Session State Machine** | ✅ Complete | All transitions + end reasons |
 | **WebSocket Realtime** | ✅ Complete | Fully functional, multi-instance ready |
 | **Location Streaming** | ✅ Complete | 2s interval, accuracy reporting |
@@ -442,7 +442,7 @@ TEST SUMMARY (Execution: 9 March 2026)
 - ✅ Implemented TTL-based ephemeral location storage (120s) and server-side throttling (1 update/2s)
 - ✅ Designed multi-instance realtime architecture using Redis pub/sub fanout (fully stateless)
 - ✅ Created session state machine with full lifecycle (PENDING → ACTIVE → ENDED) + end reasons
-- ✅ Built React + Vite web fallback app with Supabase Auth and snapshot polling (2s interval)
+- ✅ Built React + Vite web fallback app with Legacy Auth Auth and snapshot polling (2s interval)
 - ✅ Added observability: metrics collection, 4-tier validation layers, audit logging
 - ✅ Implemented privacy controls: app background pause, user pause/resume sharing, TTL ephemeral storage
 - ✅ Full test coverage: 4/4 Week 4 tests passing, multi-instance Redis pub/sub validated

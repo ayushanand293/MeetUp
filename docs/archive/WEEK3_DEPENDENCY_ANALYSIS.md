@@ -90,7 +90,7 @@ To ensure zero friction with mobile:
 
 4. **Auth Flow**
    - Still use JWT token query param
-   - Still validate with SUPABASE_KEY
+   - Still validate with LEGACY_AUTH_KEY
    - No changes needed
 
 ---

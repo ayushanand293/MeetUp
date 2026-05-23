@@ -22,7 +22,7 @@ This document is preserved for historical context. Current interviewer/deploymen
 - Caching/Sessions: Redis (Alpine)
 - ORM: SQLAlchemy 2.0+
 - Migrations: Alembic
-- Authentication: JWT (HS256 by default, fallback to Supabase key)
+- Authentication: JWT signed with `AUTH_JWT_SECRET`
 - Rate Limiting: Redis INCR + EXPIRE (Fail-Closed)
 - Metrics: In-memory counters + Redis store (backend/app/core/metrics_store.py)
 - Realtime: WebSocket + Redis pub/sub for multi-instance broadcast
@@ -36,7 +36,7 @@ This document is preserved for historical context. Current interviewer/deploymen
 - Contacts: expo-contacts 15.0.11
 - Crypto: expo-crypto 15.0.7 (SHA256 digests)
 - HTTP: axios 1.13.4
-- State: React Context + AsyncStorage (no Supabase session for OTP)
+- State: React Context + AsyncStorage for phone OTP sessions
 - Code Quality: ESLint, Prettier
 
 **Database:**
@@ -532,7 +532,7 @@ UNIQUE INDEX user_blocks_unique_pair_idx ON user_blocks(user_id, blocked_user_id
 **Connection Setup (realtime.py):**
 1. Client connects to `ws://localhost:8000/api/v1/ws/{token}`
 2. Token is JWT (extracted from query param or header)
-3. Server verifies JWT signature using AUTH_JWT_SECRET (or SUPABASE_KEY)
+3. Server verifies JWT signature using AUTH_JWT_SECRET
 4. Decoded JWT: { sub (user_id), phone_e164, email, iat, exp, iss, device_id (optional) }
 5. On invalid/expired token: Connection rejected with 403 Unauthorized
 6. On valid token: Connection accepted → `track_ws_connection_open(session_id)`

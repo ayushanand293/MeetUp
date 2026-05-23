@@ -12,7 +12,7 @@
 - **Details**:
   - WebSocket endpoint at `/api/v1/ws/meetup`
   - Accepts `token` (JWT) and `session_id` (UUID) query params
-  - Validates JWT signature using SUPABASE_KEY
+  - Validates JWT signature using LEGACY_AUTH_KEY
   - Extracts user_id from JWT `sub` claim
   - Proper error handling with WS_1008_POLICY_VIOLATION for auth failures
 

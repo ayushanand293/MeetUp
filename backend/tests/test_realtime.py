@@ -83,7 +83,7 @@ def receive_until_type(websocket, expected_type: str, timeout: float = 3.0, max_
 def create_test_token(user_id: str) -> str:
     """Helper to create a valid JWT for testing"""
     payload = {"sub": user_id, "exp": datetime.utcnow() + timedelta(hours=1), "aud": "authenticated"}
-    return jwt.encode(payload, settings.SUPABASE_KEY, algorithm="HS256")
+    return jwt.encode(payload, settings.AUTH_JWT_SECRET, algorithm=settings.AUTH_JWT_ALGORITHM)
 
 
 def test_websocket_connection_no_token(client):

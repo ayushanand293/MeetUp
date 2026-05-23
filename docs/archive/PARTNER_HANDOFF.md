@@ -18,7 +18,7 @@ This prints:
 
 *   **URL**: `ws://localhost:8000/api/v1/ws/meetup` (Note the `/api/v1` prefix!)
 *   **Query Params**:
-    *   `token`: Your Supabase JWT.
+    *   `token`: Your Legacy Auth JWT.
     *   `session_id`: The UUID of the session.
 
 Example URL:
