@@ -68,6 +68,13 @@ Backend endpoints:
 - `GET http://localhost:8000/ready`
 - `GET http://localhost:8000/api/v1/metrics?format=prometheus`
 
+## Proof
+
+- One-command interviewer gate: `./scripts/interviewer_quickcheck.sh`
+- Backend regression suite: `docker compose exec -T backend pytest -q`
+- Smoke flow: `./scripts/beta_smoke.sh`
+- Runtime signals: `/health`, `/ready`, and `/api/v1/metrics?format=prometheus`
+
 ## Mobile Setup
 
 ```bash
