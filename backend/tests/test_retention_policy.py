@@ -20,7 +20,7 @@ def _token_for(user_id: uuid.UUID, email: str) -> str:
         "aud": "authenticated",
         "exp": datetime.utcnow() + timedelta(hours=1),
     }
-    return jwt.encode(payload, settings.SUPABASE_KEY, algorithm="HS256")
+    return jwt.encode(payload, settings.AUTH_JWT_SECRET, algorithm=settings.AUTH_JWT_ALGORITHM)
 
 
 def test_realtime_location_is_redis_only_with_ttl(db):

@@ -8,6 +8,9 @@ on:
 jobs:
   backend-week4-tests:
     runs-on: ubuntu-latest
+    env:
+      AUTH_JWT_SECRET: ci-test-secret-at-least-32-bytes
+      PHONE_HASH_PEPPER: ci-test-pepper-at-least-32-bytes
     steps:
       - uses: actions/checkout@v4
 
@@ -37,8 +40,7 @@ jobs:
         run: docker compose exec -T backend pytest -q
 
       - name: Make smoke scripts executable
-        run: |
-          chmod +x scripts/beta_smoke.sh scripts/interviewer_quickcheck.sh
+        run: chmod +x scripts/beta_smoke.sh
 
       - name: Run smoke flow
         run: ./scripts/beta_smoke.sh

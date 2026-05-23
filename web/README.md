@@ -4,7 +4,7 @@ Real-time location sharing web fallback using snapshot polling.
 
 ## Features
 
-- ✅ Supabase Auth (email/password login)
+- ✅ Backend-issued JWT token login for debug access
 - ✅ Live map with Leaflet.js
 - ✅ Snapshot polling every 2 seconds (fallback for WebSocket)
 - ✅ Real-time peer location updates with accuracy circles
@@ -30,7 +30,7 @@ Copy `.env.example` to `.env`:
 cp .env.example .env
 ```
 
-The default values point to localhost backend and shared Supabase project.
+The default values point to the localhost backend.
 
 ### 3. Start development server
 
@@ -42,7 +42,7 @@ App opens at `http://localhost:5173`
 
 ## Usage
 
-1. **Login**: Sign in with Supabase credentials
+1. **Login**: Paste a backend-issued JWT token
 2. **Enter Session ID**: Paste the session UUID from your mobile app
 3. **View Map**: See live locations of all session participants
 4. **Controls**:
@@ -55,10 +55,9 @@ App opens at `http://localhost:5173`
 ```
 src/
 ├── components/
-│   ├── LoginScreen.jsx     # Supabase auth UI
+│   ├── LoginScreen.jsx     # JWT token login UI
 │   └── SessionMap.jsx      # Map view + polling
 ├── services/
-│   ├── supabaseClient.js   # Auth functions
 │   └── snapshotService.js  # API calls + polling
 ├── styles/
 │   └── App.css             # Responsive styling
@@ -80,7 +79,6 @@ User can: Pause polling, Resume polling, End session, Logout
 
 ## API Endpoints Used
 
-- `POST /api/v1/auth/login` - Supabase (via SDK)
 - `GET /api/v1/sessions/{session_id}/snapshot` - Fetch latest locations
 - `PUT /api/v1/sessions/{session_id}/end` - End session
 

@@ -27,7 +27,7 @@ def db():
         db.close()
 
 
-# Mock Auth Logic (still mocked to avoid needing real Supabase tokens)
+# Mock Auth Logic (still mocked to avoid needing real JWT tokens)
 # We will create users in the DB directly for the mock to find them
 user1_id = uuid.uuid4()
 user2_id = uuid.uuid4()
