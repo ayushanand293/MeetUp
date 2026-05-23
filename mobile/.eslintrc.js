@@ -25,8 +25,12 @@ module.exports = {
     'react/no-unescaped-entities': 'warn',
     'no-empty': 'warn',
     'no-unused-vars': ['warn', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
-    'react-native/no-inline-styles': 'warn',
-    'react-native/no-unused-styles': 'warn',
+    // This app intentionally uses theme-driven dynamic style objects inside
+    // screens. These two rules create hundreds of stylistic/false-positive
+    // warnings without catching runtime issues, while hooks and unused-symbol
+    // rules remain active.
+    'react-native/no-inline-styles': 'off',
+    'react-native/no-unused-styles': 'off',
     'react-hooks/rules-of-hooks': 'error',
     'react-hooks/exhaustive-deps': 'warn',
   },
