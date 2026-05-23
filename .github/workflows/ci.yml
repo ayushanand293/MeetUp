@@ -40,7 +40,8 @@ jobs:
         run: docker compose exec -T backend pytest -q
 
       - name: Make smoke scripts executable
-        run: chmod +x scripts/beta_smoke.sh
+        run: |
+          chmod +x scripts/beta_smoke.sh scripts/interviewer_quickcheck.sh
 
       - name: Run smoke flow
         run: ./scripts/beta_smoke.sh

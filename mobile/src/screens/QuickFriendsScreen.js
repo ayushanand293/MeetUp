@@ -13,6 +13,8 @@ const QuickFriendRow = ({ friend, index, handleMeetAgain, colors }) => {
             Animated.timing(opacity, { toValue: 1, duration: 300, delay: Math.min(index, 12) * 50, useNativeDriver: true }),
             Animated.timing(translateY, { toValue: 0, duration: 300, delay: Math.min(index, 12) * 50, useNativeDriver: true }),
         ]).start();
+    // Row entrance animation should run once when the row mounts.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     return (
