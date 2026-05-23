@@ -67,6 +67,8 @@ For a physical device:
 EXPO_PUBLIC_API_BASE_URL=http://YOUR_LAN_IP:8000/api/v1 npm run start
 ```
 
+Mobile lint currently reports warnings, mostly hook dependency and style warnings. It reports 0 errors in the current cleanup pass and is not blocking functionality.
+
 ## 6. Demo Flow
 
 Use two devices/accounts:
