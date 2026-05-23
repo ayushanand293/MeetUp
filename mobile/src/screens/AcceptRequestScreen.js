@@ -252,6 +252,8 @@ const RequestCard = ({ item, index, colors, accepting, onAccept, onDecline, link
             Animated.timing(opacity, { toValue: 1, duration: 300, delay: index * 60, useNativeDriver: true }),
             Animated.spring(translateY, { toValue: 0, delay: index * 60, useNativeDriver: true, tension: 80 }),
         ]).start();
+    // Card entrance animation should run once when the card mounts.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     const initials = (item.requester_name || '?')[0].toUpperCase();

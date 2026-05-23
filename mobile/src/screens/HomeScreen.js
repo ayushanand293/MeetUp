@@ -60,6 +60,8 @@ const HomeScreen = ({ navigation, route }) => {
                 Animated.timing(cardsOp, { toValue: 1, duration: 350, useNativeDriver: true }),
             ]),
         ]).start();
+    // Entrance animation should run once with stable Animated.Value refs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     useEffect(() => {
@@ -118,8 +120,6 @@ const HomeScreen = ({ navigation, route }) => {
 
             const session = sRes.status === 'fulfilled' && sRes.value.data?.session_id ? sRes.value.data : null;
             const nextSessionId = session?.session_id || null;
-            const prevSessionId = activeSessionIdRef.current;
-
             // Keep active session card stable across brief API null responses.
             if (session) {
                 missingActiveSessionPollsRef.current = 0;

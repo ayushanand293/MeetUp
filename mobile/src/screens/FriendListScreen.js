@@ -70,7 +70,7 @@ const digestPhone = async (version, phone) => {
   );
 };
 
-const ContactRow = ({ item, colors, actionLabel, onPress, index = 0 }) => {
+const ContactRow = ({ item, colors, actionLabel, onPress }) => {
   const scale = React.useRef(new Animated.Value(1)).current;
   
   return (
@@ -561,7 +561,6 @@ const FriendListScreen = ({ navigation }) => {
 
               return (
                 <ContactRow
-                  index={item.index}
                   item={item.contact}
                   colors={colors}
                   actionLabel={busyContact === item.contact.key ? '...' : item.action}
