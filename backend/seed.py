@@ -38,6 +38,19 @@ def demo_user(user_id, name: str, phone_e164: str) -> User:
     )
 
 
+def demo_user(user_id, name: str, phone_e164: str) -> User:
+    return User(
+        id=user_id,
+        phone_e164=phone_e164,
+        phone_verified_at=datetime.utcnow(),
+        phone_hash=phone_hash(phone_e164),
+        phone_digest=phone_digest(settings.CONTACTS_HASH_VERSION, phone_e164),
+        email=f"{name.lower()}_{str(user_id)[:4]}@test.com",
+        display_name=name,
+        profile_data={"name": name},
+    )
+
+
 def seed():
     db = SessionLocal()
     try:

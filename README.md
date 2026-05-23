@@ -1,8 +1,16 @@
 # MeetUp
 
+[![CI](https://github.com/ayushanand293/MeetUp/actions/workflows/ci.yml/badge.svg)](https://github.com/ayushanand293/MeetUp/actions/workflows/ci.yml)
+
 MeetUp is a phone-first, contacts-first app for private 1:1 live meetups. It lets two people request or invite each other, then share temporary realtime location only during an accepted active session.
 
 The repo contains a FastAPI/Postgres/Redis backend and an Expo React Native mobile app, with Docker Compose for local verification and staging-style deployment.
+
+## Demo
+
+- Demo video placeholder: [docs/demo_video.md](docs/demo_video.md). Record a short two-device walkthrough before sharing the repo externally.
+- Fast local run: [docs/INTERVIEWER_QUICKSTART.md](docs/INTERVIEWER_QUICKSTART.md)
+- Two-device walkthrough: [docs/demo_script.md](docs/demo_script.md)
 
 ## Features
 
@@ -33,6 +41,13 @@ More details:
 - [Interview story](docs/interview_story.md)
 - [Security notes](docs/SECURITY.md)
 - [Configuration](docs/config.md)
+
+## What To Look At In Code
+
+- `backend/app/api/endpoints/realtime.py`: WebSocket authentication, session membership checks, block gating, and realtime location fanout.
+- `backend/app/core/rate_limit.py`: Redis-backed rate limiting with fail-closed behavior.
+- `mobile/src/screens/ActiveSessionScreen.js`: active session UI, peer freshness, destination display, and session controls.
+- `backend/app/api/endpoints/invites.py`: unmatched-contact invite creation, token resolution, and deep-link acceptance.
 
 ## One-Command Local Run
 
