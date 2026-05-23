@@ -8,7 +8,7 @@ The MeetUp mobile client requires a few environment variables to function correc
 
 ### `AUTH_JWT_SECRET`
 - **Description:** JWT signing secret for OTP-issued access tokens.
-- **Required:** Recommended in all environments. Falls back to `SUPABASE_KEY` if unset.
+- **Required:** Yes in production. Local development uses a non-production default unless overridden.
 
 ### `AUTH_ACCESS_TOKEN_TTL_SECONDS`
 - **Description:** Access token lifetime in seconds.

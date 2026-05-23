@@ -264,7 +264,7 @@ ws://<host>/api/v1/ws/meetup?token=<JWT>&session_id=<UUID>
 ### Prerequisites
 - Docker & Docker Compose
 - Node.js ≥ 18 (for mobile development)
-- A Supabase project (for JWT secret)
+- A strong local JWT secret for backend-issued auth tokens
 
 ### 1 — Environment Setup
 
@@ -273,8 +273,8 @@ cp .env.example .env
 ```
 
 Open `.env` and fill in:
-- `SUPABASE_URL` — your Supabase project URL
-- `SUPABASE_KEY` — your Supabase **JWT Secret** (used for server-side token verification)
+- `AUTH_JWT_SECRET` — strong JWT signing secret for backend-issued access tokens
+- `PHONE_HASH_PEPPER` — strong pepper for server-side phone hashes
 
 ### 2 — Start the Stack
 

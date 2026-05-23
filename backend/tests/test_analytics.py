@@ -17,7 +17,7 @@ def _token_for(user_id: uuid.UUID, email: str) -> str:
         "aud": "authenticated",
         "exp": datetime.now(timezone.utc) + timedelta(hours=1),
     }
-    return jwt.encode(payload, settings.SUPABASE_KEY, algorithm="HS256")
+    return jwt.encode(payload, settings.AUTH_JWT_SECRET, algorithm=settings.AUTH_JWT_ALGORITHM)
 
 
 def test_analytics_event_authorized_returns_204(client, db):

@@ -77,7 +77,7 @@ INSERT INTO sessions (id, status) VALUES ('00000000-0000-0000-0000-000000000000'
 echo "2. Testing Invite Creation..."
 TEST_TOKEN=$(docker compose exec -T backend python -c "
 import jwt, time, os
-key = os.environ.get('AUTH_JWT_SECRET') or os.environ.get('SUPABASE_KEY')
+key = os.environ['AUTH_JWT_SECRET']
 print(jwt.encode({'sub': '11111111-1111-1111-1111-111111111111', 'exp': int(time.time())+3600}, key, algorithm='HS256'))
 ")
 # Strip any carriage returns or whitespace

@@ -102,35 +102,14 @@ async def websocket_endpoint(
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
 
-    # 1. Authenticate (Manually verify JWT — supports ES256 via JWKS and HS256 fallback)
+    # 1. Authenticate with backend-issued JWT
     try:
-        from app.api.deps import _get_jwks_keys
-
-        unverified_header = jwt.get_unverified_header(token)
-        alg = unverified_header.get("alg", "HS256")
-        kid = unverified_header.get("kid")
-
-        if alg == "ES256" and kid:
-            keys = _get_jwks_keys()
-            public_key = keys.get(kid)
-            if not public_key:
-                raise ValueError(f"Unknown key ID: {kid}")
-            payload = jwt.decode(token, public_key, algorithms=["ES256"], options={"verify_aud": False})
-        else:
-            payload = None
-            secrets_to_try = [settings.SUPABASE_KEY]
-            if settings.AUTH_JWT_SECRET:
-                secrets_to_try.insert(0, settings.AUTH_JWT_SECRET)
-            for decode_secret in secrets_to_try:
-                if not decode_secret:
-                    continue
-                try:
-                    payload = jwt.decode(token, decode_secret, algorithms=["HS256"], options={"verify_aud": False})
-                    break
-                except PyJWTError:
-                    continue
-            if payload is None:
-                raise ValueError("Could not validate credentials")
+        payload = jwt.decode(
+            token,
+            settings.AUTH_JWT_SECRET,
+            algorithms=[settings.AUTH_JWT_ALGORITHM],
+            options={"verify_aud": False},
+        )
 
         user_id = UUID(payload.get("sub"))
         if payload.get("iss") == "meetup-otp":
