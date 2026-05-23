@@ -6,7 +6,7 @@ A **real-time location sharing app** that helps two users coordinate meetings by
 
 ### User Journey
 ```
-1. Register/Login (Supabase Auth)
+1. Register/Login (Legacy Auth Auth)
    ↓
 2. View friend list & send meet request
    ↓
@@ -28,13 +28,13 @@ A **real-time location sharing app** that helps two users coordinate meetings by
 - **Database**: PostgreSQL + PostGIS (geospatial queries)
 - **Cache**: Redis
 - **Realtime**: WebSocket
-- **Auth**: Supabase JWT
+- **Auth**: Legacy Auth JWT
 - **Deployment**: Docker + Docker Compose
 
 ### Frontend
 - **Mobile**: React Native + Expo (iOS/Android)
 - **Web**: HTML/JS with Leaflet maps (debugging tool)
-- **Auth**: Supabase client library
+- **Auth**: Legacy Auth client library
 - **HTTP**: Axios with interceptors
 
 ---
@@ -73,7 +73,7 @@ mobile/
 │   ├── context/AuthContext.js  # Auth state management
 │   ├── api/
 │   │   ├── client.js           # Axios setup with JWT
-│   │   └── supabase.js         # Supabase client
+│   │   └── legacy-auth.js         # Legacy Auth client
 │   ├── navigation/AppNavigator.js  # Screen routing
 │   └── screens/
 │       ├── LoginScreen.js      # Email/Phone auth
@@ -189,15 +189,15 @@ Mobile App
     ↓
 1. User enters email/password
     ↓
-2. Calls Supabase Auth API
+2. Calls Legacy Auth Auth API
     ↓
 3. Receives JWT + Refresh Token
     ↓
-4. App stores in Supabase session
+4. App stores in Legacy Auth session
     ↓
 5. All HTTP requests: Authorization: Bearer {JWT}
     ↓
-6. Backend verifies JWT signature using SUPABASE_KEY
+6. Backend verifies JWT signature using LEGACY_AUTH_KEY
     ↓
 7. Auto-creates user if first login
     ↓
@@ -246,8 +246,8 @@ User A (Alice)                          User B (Bob)
 cd /Users/ayushanand/Projects/MeetUp
 cp backend/.env.example backend/.env
 # Edit backend/.env with:
-#   SUPABASE_URL=https://your-project.supabase.co
-#   SUPABASE_KEY=your-jwt-secret
+#   LEGACY_AUTH_URL=https://your-project.legacy-auth.co
+#   LEGACY_AUTH_KEY=your-jwt-secret
 ```
 
 ### 2. Start Services
@@ -382,7 +382,7 @@ Authorization: Bearer eyJhbGc...
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| User Auth | ✅ Complete | Supabase + Auto-create |
+| User Auth | ✅ Complete | Legacy Auth + Auto-create |
 | Meet Requests | ✅ Backend only | Mobile UI not implemented |
 | Session Creation | ✅ Backend only | Mobile UI not implemented |
 | Location Sharing | 🟡 Partial | WebSocket works, mobile map UI missing |
@@ -408,7 +408,7 @@ Authorization: Bearer eyJhbGc...
 
 ### Mobile Connection Issues
 1. Check base URL: Should match backend IP
-2. Verify Supabase keys in `.env`
+2. Verify Legacy Auth keys in `.env`
 3. Test with Expo: `expo start --web` for quick testing
 4. Check Android emulator network: May need `10.0.2.2` instead of `localhost`
 
@@ -418,7 +418,7 @@ Authorization: Bearer eyJhbGc...
 
 ```
 Authentication Flow:
-  LoginScreen → AuthContext → supabase-js
+  LoginScreen → AuthContext → legacy-auth-js
                              ↓ (stores JWT)
                          async-storage
 

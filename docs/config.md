@@ -97,6 +97,11 @@ Background sharing is only started from `ActiveSessionScreen` after an active se
 - **Required:** No
 - **Default:** `true`
 
+### `EXPO_PUBLIC_MOCK_LAT` / `EXPO_PUBLIC_MOCK_LON`
+- **Description:** Optional development-only mock coordinate pair used by `mobile/src/services/locationService.js`.
+- **Required:** No.
+- **Safety:** Do not set in production builds.
+
 ## Example Usage
 
 ### Local Testing (iOS Simulator / Android Emulator)

@@ -1,3 +1,9 @@
+# ARCHIVED - 2026-05-23
+
+This document is preserved for historical context. Current interviewer/deployment docs live in README.md, docs/INTERVIEWER_QUICKSTART.md, docs/ops_predeploy.md, docs/demo_script.md, and docs/interview_story.md.
+
+---
+
 # UI Handoff: Meet At A Common Point
 
 This handoff is for continuing the UI work on the MeetUp app after the backend and minimum viable mobile flow were added.

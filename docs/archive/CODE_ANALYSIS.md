@@ -6,7 +6,7 @@
 
 ### Key Features
 - Real-time location streaming via WebSocket
-- User authentication (Supabase JWT)
+- User authentication (Legacy Auth JWT)
 - Meet request system (send/accept/reject)
 - Active session management with proximity tracking
 - Presence updates (online/offline status)
@@ -65,7 +65,7 @@
 - **`app/core/config.py`**: Settings management using Pydantic
   - `DATABASE_URL` - PostgreSQL connection string
   - `REDIS_URL` - Redis cache connection
-  - `SUPABASE_KEY` - JWT secret for token verification
+  - `LEGACY_AUTH_KEY` - JWT secret for token verification
 
 - **`app/core/database.py`**: SQLAlchemy engine and session setup
   - Creates SQLAlchemy engine connected to PostgreSQL
@@ -161,7 +161,7 @@
   - Authentication: Validates JWT, extracts `user_id` from `sub` claim
   - Connection Flow:
     1. Validate token and session_id format
-    2. Verify JWT signature using SUPABASE_KEY
+    2. Verify JWT signature using LEGACY_AUTH_KEY
     3. Register websocket with ConnectionManager
     4. Broadcast ONLINE presence to session participants
   - Message Handling Loop:
@@ -203,7 +203,7 @@ Server → Client:
 #### Authentication (`api/deps.py`)
 - `get_current_user()` - Dependency for protected routes
   - Uses HTTPBearer authentication scheme
-  - Decodes JWT token using SUPABASE_KEY
+  - Decodes JWT token using LEGACY_AUTH_KEY
   - Extracts user_id from `sub` claim, email from `email` claim
   - Auto-creates user on first login if not in database
   - Raises 403 HTTPException on invalid token
@@ -249,14 +249,14 @@ Server → Client:
 #### Entry Point (`App.js`)
 - Wraps app in SafeAreaProvider (handles notches/safe areas)
 - AuthProvider wraps AuthContext
-- Logs Supabase URL for debugging
+- Logs Legacy Auth URL for debugging
 - Shows redirectUrl for OAuth flow
 
 #### Configuration
 **`package.json`**:
 - React 19.1.0, React Native 0.81.5
 - Key Dependencies:
-  - `@supabase/supabase-js` - Auth & real-time DB
+  - `@legacy-auth/legacy-auth-js` - Auth & real-time DB
   - `axios` - HTTP client
   - `@react-navigation/native` - Navigation framework
   - `async-storage` - Local persistence
@@ -269,7 +269,7 @@ Server → Client:
   - Magic links
 
 - **Context Values**:
-  - `session` - Current Supabase session
+  - `session` - Current Legacy Auth session
   - `user` - Current user object
   - `loading` - Auth state loading indicator
   - Methods: `signInWithEmail()`, `signUpWithEmail()`, `signInWithPhone()`, `verifyPhoneOTP()`, `signOut()`, `resetPassword()`
@@ -287,11 +287,11 @@ Server → Client:
   - Android emulator: `http://10.0.2.2:8000/api/v1`
   - Fallback: `http://localhost:8000/api/v1`
 
-- **Supabase Client** (`src/api/supabase.js`):
-  - Initialized with EXPO_PUBLIC_SUPABASE_URL and EXPO_PUBLIC_SUPABASE_ANON_KEY
+- **Legacy Auth Client** (`src/api/legacy-auth.js`):
+  - Initialized with EXPO_PUBLIC_LEGACY_AUTH_URL and EXPO_PUBLIC_LEGACY_AUTH_ANON_KEY
 
 - **Interceptor**:
-  - Automatically adds Supabase JWT token to Authorization header
+  - Automatically adds Legacy Auth JWT token to Authorization header
   - Handles 401 responses (token refresh)
 
 #### Navigation (`src/navigation/AppNavigator.js`)
@@ -401,9 +401,9 @@ Server → Client:
 ### User Registration & Login Flow
 ```
 1. User enters email/password in LoginScreen
-2. Calls Supabase Auth API via AuthContext.signInWithEmail()
+2. Calls Legacy Auth Auth API via AuthContext.signInWithEmail()
 3. Receives JWT token & refresh token
-4. AuthProvider stores in Supabase session
+4. AuthProvider stores in Legacy Auth session
 5. Navigation auto-switches to MainStack
 6. Axios interceptor automatically adds JWT to all API requests
 ```
@@ -491,7 +491,7 @@ SessionParticipant (Many) ←→ User (1)
 ✅ **Good Practices**:
 - JWT authentication on all protected endpoints
 - WebSocket token validation before accepting connection
-- Supabase-managed user authentication
+- Legacy Auth-managed user authentication
 - User auto-creation on first login with provided email
 
 ⚠️ **Areas for Improvement**:
@@ -515,13 +515,13 @@ SessionParticipant (Many) ←→ User (1)
 ```
 DATABASE_URL=postgresql://user:password@db:5432/meetup
 REDIS_URL=redis://redis:6379/0
-SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_KEY=your-jwt-secret
+LEGACY_AUTH_URL=https://your-project.legacy-auth.co
+LEGACY_AUTH_KEY=your-jwt-secret
 POSTGRES_USER=user
 POSTGRES_PASSWORD=password
 POSTGRES_DB=meetup
-EXPO_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
-EXPO_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
+EXPO_PUBLIC_LEGACY_AUTH_URL=https://your-project.legacy-auth.co
+EXPO_PUBLIC_LEGACY_AUTH_ANON_KEY=your-anon-key
 ```
 
 ### Seed & Testing
@@ -558,7 +558,7 @@ EXPO_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
 
 | Feature | Backend | Mobile | Web | Status |
 |---------|---------|--------|-----|--------|
-| User Auth | ✅ Supabase | ✅ Full | N/A | Complete |
+| User Auth | ✅ Legacy Auth | ✅ Full | N/A | Complete |
 | User Profile | ✅ REST | 🟡 Basic | N/A | Partial |
 | Meet Requests | ✅ Full CRUD | ❌ Not implemented | N/A | Backend only |
 | Session Creation | ✅ REST | ❌ Not implemented | N/A | Backend only |
@@ -620,4 +620,4 @@ EXPO_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
 
 ## 🎓 Summary
 
-MeetUp is a well-structured real-time location sharing application with a solid backend foundation using FastAPI, PostgreSQL, and WebSocket. The mobile app framework is set up but needs implementation of key screens and map integration. The architecture supports scalability through Docker containerization and uses industry-standard tools (Supabase, Redis, PostGIS). Main gaps are in mobile UI implementation and proximity-based features.
+MeetUp is a well-structured real-time location sharing application with a solid backend foundation using FastAPI, PostgreSQL, and WebSocket. The mobile app framework is set up but needs implementation of key screens and map integration. The architecture supports scalability through Docker containerization and uses industry-standard tools (Legacy Auth, Redis, PostGIS). Main gaps are in mobile UI implementation and proximity-based features.
