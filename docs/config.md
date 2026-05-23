@@ -8,7 +8,7 @@ The MeetUp mobile client requires a few environment variables to function correc
 
 ### `AUTH_JWT_SECRET`
 - **Description:** JWT signing secret for OTP-issued access tokens.
-- **Required:** Recommended in all environments. Falls back to `SUPABASE_KEY` if unset.
+- **Required:** Yes in production. Local development uses a non-production default unless overridden.
 
 ### `AUTH_ACCESS_TOKEN_TTL_SECONDS`
 - **Description:** Access token lifetime in seconds.
@@ -96,14 +96,6 @@ Background sharing is only started from `ActiveSessionScreen` after an active se
 - **Description:** Toggle analytics tracking.
 - **Required:** No
 - **Default:** `true`
-
-### `EXPO_PUBLIC_SUPABASE_URL`
-- **Description:** Optional Supabase project URL used only by the legacy/magic-link compatibility path in `mobile/src/api/supabase.js`.
-- **Required:** No for the current phone OTP flow.
-
-### `EXPO_PUBLIC_SUPABASE_KEY`
-- **Description:** Optional Supabase anon key used only by the legacy/magic-link compatibility path in `mobile/src/api/supabase.js`.
-- **Required:** No for the current phone OTP flow.
 
 ### `EXPO_PUBLIC_MOCK_LAT` / `EXPO_PUBLIC_MOCK_LON`
 - **Description:** Optional development-only mock coordinate pair used by `mobile/src/services/locationService.js`.

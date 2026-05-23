@@ -12,7 +12,7 @@
 
 #### Backend API (Week 1-2)
 - ✅ REST endpoints for user management, requests, sessions
-- ✅ Supabase JWT authentication
+- ✅ Legacy Auth JWT authentication
 - ✅ Database models (users, sessions, meet_requests, participants)
 - ✅ WebSocket gateway at `/api/v1/ws/meetup`
 - ✅ Real-time broadcasting (location_update → peer_location)
@@ -35,11 +35,11 @@
 
 #### Mobile Scaffolding (Weeks 1-2)
 - ✅ App structure with React Navigation
-- ✅ Auth context (Supabase login/logout/session)
+- ✅ Auth context (Legacy Auth login/logout/session)
 - ✅ Axios HTTP client with JWT interceptor
 - ✅ Screen navigation (Auth Stack → Main Stack)
 - ✅ All screens created (placeholder implementations)
-- ✅ Supabase auth fully working
+- ✅ Legacy Auth auth fully working
 - ✅ Logo branding
 
 ---
@@ -481,7 +481,7 @@ mobile/
 │   │   └── ActiveSessionScreen.js # REWRITE - Add map + realtime
 │   ├── api/
 │   │   ├── client.js              # EXISTING - HTTP requests
-│   │   └── supabase.js            # EXISTING - Auth
+│   │   └── legacy-auth.js            # EXISTING - Auth
 │   ├── context/
 │   │   └── AuthContext.js         # EXISTING - Keep as is
 │   └── navigation/

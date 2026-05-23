@@ -22,11 +22,20 @@ def create_test_token(user_id: str) -> str:
         "aud": "authenticated",
         "email": f"user_{user_id[:4]}@example.com",
     }
-    key = settings.AUTH_JWT_SECRET or settings.SUPABASE_KEY
-    if not key:
-        print("⚠️  WARNING: AUTH_JWT_SECRET and SUPABASE_KEY are empty. Tokens will be insecure.")
+    return jwt.encode(payload, settings.AUTH_JWT_SECRET, algorithm=settings.AUTH_JWT_ALGORITHM)
 
-    return jwt.encode(payload, key or "", algorithm="HS256")
+
+def demo_user(user_id, name: str, phone_e164: str) -> User:
+    return User(
+        id=user_id,
+        phone_e164=phone_e164,
+        phone_verified_at=datetime.utcnow(),
+        phone_hash=phone_hash(phone_e164),
+        phone_digest=phone_digest(settings.CONTACTS_HASH_VERSION, phone_e164),
+        email=f"{name.lower()}_{str(user_id)[:4]}@test.com",
+        display_name=name,
+        profile_data={"name": name},
+    )
 
 
 def demo_user(user_id, name: str, phone_e164: str) -> User:

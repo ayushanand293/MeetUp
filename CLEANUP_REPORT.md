@@ -126,7 +126,6 @@ These items looked like possible cleanup candidates but were kept because they m
 - `backend/scripts/simulate_movement.py`: useful manual/demo utility.
 - `backend/scripts/run_session_cleanup.py`: operational utility.
 - `test_otp_flow.sh`: manual OTP dev flow helper.
-- `mobile/src/api/supabase.js` and related Supabase auth compatibility code: still imported by the mobile auth context.
 - `web/`: still built by CI and useful as a debug/demo surface.
 
 ## Verification

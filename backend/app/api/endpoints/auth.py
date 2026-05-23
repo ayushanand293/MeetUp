@@ -40,7 +40,7 @@ class OtpVerifyBody(BaseModel):
 
 
 def _jwt_secret() -> str:
-    return settings.AUTH_JWT_SECRET or settings.SUPABASE_KEY
+    return settings.AUTH_JWT_SECRET
 
 
 def _issue_access_token(user: User, device_id: str | None, session_id: str) -> str:

@@ -20,7 +20,7 @@ for VAR in "${REQUIRED_VARS[@]}"; do
         MISSING=$((MISSING + 1))
     else
         # Mask secrets in output
-        if [[ "$VAR" == *"KEY"* || "$VAR" == *"URL"* ]]; then
+        if [[ "$VAR" == *"KEY"* || "$VAR" == *"SECRET"* || "$VAR" == *"PEPPER"* || "$VAR" == *"URL"* ]]; then
              echo "PASS: $VAR is set [HIDDEN]"
         else
              echo "PASS: $VAR is set to ${!VAR}"

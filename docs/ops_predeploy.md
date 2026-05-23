@@ -13,7 +13,7 @@ Required for staging/production:
 | `DATABASE_URL` | `postgresql://meetup:...@db:5432/meetup` | Required by `backend/app/core/config.py` |
 | `REDIS_URL` | `redis://redis:6379/0` | Required for OTPs, rate limits, pub/sub, metrics |
 | `ENVIRONMENT` | `production` | Controls CORS default and log level |
-| `AUTH_JWT_SECRET` | strong random secret | Required for OTP-issued JWTs unless falling back to `SUPABASE_KEY` |
+| `AUTH_JWT_SECRET` | strong random secret | Required for OTP-issued JWTs |
 | `AUTH_JWT_ALGORITHM` | `HS256` | Default in code |
 | `AUTH_ACCESS_TOKEN_TTL_SECONDS` | `86400` | Default in code |
 | `PHONE_HASH_PEPPER` | strong random pepper | Required for stable server-side phone hashes |
@@ -26,8 +26,6 @@ Optional or provider-dependent:
 
 | Variable | Notes |
 |----------|-------|
-| `SUPABASE_URL` | Needed only for Supabase ES256 JWKS validation paths |
-| `SUPABASE_KEY` | Needed for Supabase HS256/legacy token fallback or if `AUTH_JWT_SECRET` is unset |
 | `OTP_TTL_SECONDS`, `OTP_DIGITS`, `OTP_*_LIMIT_*` | Defaults are defined in `backend/app/core/config.py` |
 | `CONTACTS_HASH_VERSION`, `CONTACTS_MATCH_*` | Defaults are defined in `backend/app/core/config.py` |
 

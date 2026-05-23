@@ -11,7 +11,6 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy.orm import Session
 
-from app.api.deps import _get_jwks_keys
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.metrics import export_prometheus_text, get_metrics
@@ -37,18 +36,12 @@ def _resolve_analytics_user_id(credentials: HTTPAuthorizationCredentials | None)
 
     token = credentials.credentials
     try:
-        unverified_header = jwt.get_unverified_header(token)
-        alg = unverified_header.get("alg", "HS256")
-        kid = unverified_header.get("kid")
-
-        if alg == "ES256" and kid:
-            keys = _get_jwks_keys()
-            public_key = keys.get(kid)
-            if not public_key:
-                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
-            payload = jwt.decode(token, public_key, algorithms=["ES256"], options={"verify_aud": False})
-        else:
-            payload = jwt.decode(token, settings.SUPABASE_KEY, algorithms=["HS256"], options={"verify_aud": False})
+        payload = jwt.decode(
+            token,
+            settings.AUTH_JWT_SECRET,
+            algorithms=[settings.AUTH_JWT_ALGORITHM],
+            options={"verify_aud": False},
+        )
 
         return UUID(payload.get("sub"))
     except Exception:

@@ -38,14 +38,12 @@ services:
     environment:
       - DATABASE_URL=postgresql://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD:-password}@db:5432/${POSTGRES_DB:-meetup}
       - REDIS_URL=redis://redis:6379/0
-      - SUPABASE_URL=${SUPABASE_URL:-}
-      - SUPABASE_KEY=${SUPABASE_KEY:-}
       - ANALYTICS_ENABLED=${ANALYTICS_ENABLED:-true}
       - PROJECT_NAME=${PROJECT_NAME:-MeetUp API}
-      - ENVIRONMENT=${ENVIRONMENT:-production}
+      - ENVIRONMENT=${ENVIRONMENT:-development}
       - CORS_ORIGINS=${CORS_ORIGINS:-[]}
       - METRICS_BACKEND=${METRICS_BACKEND:-redis}
-      - AUTH_JWT_SECRET=${AUTH_JWT_SECRET:-}
+      - AUTH_JWT_SECRET=${AUTH_JWT_SECRET:-dev-auth-jwt-secret-change-me-minimum-32-bytes}
       - AUTH_JWT_ALGORITHM=${AUTH_JWT_ALGORITHM:-HS256}
       - AUTH_ACCESS_TOKEN_TTL_SECONDS=${AUTH_ACCESS_TOKEN_TTL_SECONDS:-86400}
       - OTP_TTL_SECONDS=${OTP_TTL_SECONDS:-300}

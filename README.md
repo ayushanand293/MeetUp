@@ -122,7 +122,7 @@ cd mobile
 npm run lint
 ```
 
-CI is defined in `.github/workflows/ci.yml`. It starts Docker services, waits for `/health`, runs selected backend integration/security tests, runs `pip-audit`, runs legacy compatibility tests, and runs web lint/build.
+CI is defined in `.github/workflows/ci.yml`. It starts Docker services, waits for `/health`, runs migrations, runs the full backend test suite, runs the smoke flow, runs `pip-audit`, and runs web lint/build.
 
 ## Repository Structure
 

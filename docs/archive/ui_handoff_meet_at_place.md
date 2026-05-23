@@ -220,8 +220,6 @@ Required for phone testing:
 
 ```env
 EXPO_PUBLIC_API_BASE_URL=http://YOUR_MAC_IP:8000/api/v1
-EXPO_PUBLIC_SUPABASE_URL=...
-EXPO_PUBLIC_SUPABASE_KEY=...
 EXPO_PUBLIC_ORS_KEY=...
 ```
 
@@ -413,4 +411,3 @@ EXPO_PUBLIC_API_BASE_URL=http://localhost:8000/api/v1
 ```
 
 But for normal wireless testing, prefer the Mac IP.
-

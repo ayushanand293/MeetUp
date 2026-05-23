@@ -30,7 +30,7 @@
   - Status: ✅ All containers healthy and connected
   - Testing: `docker-compose up -d` works in one command
 
-- [x] **Supabase Auth integration**
+- [x] **Legacy Auth Auth integration**
   - JWT verification on API: ✅ Implemented in `backend/app/api/deps.py`
   - **KEY FIX**: Now supports both **ES256** (modern) and **HS256** (legacy)
   - User profile storage on first login: ✅ In `/api/v1/users/profile`
@@ -62,7 +62,7 @@
   - Permissions: Location request flow implemented
   - Status: ✅ App runs on iOS/Android emulator
 
-- [x] **Supabase Auth in mobile**
+- [x] **Legacy Auth Auth in mobile**
   - Login/logout: ✅ Working in LoginScreen.js
   - Session persistence: ✅ Using AsyncStorage
   - Status: ✅ Users can log in and stay logged in
@@ -77,7 +77,7 @@
 
 - [x] **Basic web shell created**
   - Framework: React + Vite
-  - Auth: Supabase Auth integration
+  - Auth: Legacy Auth Auth integration
   - Status: ✅ Web scaffold ready for Week 8 "wow feature"
 
 ### DevOps & Product Polish
@@ -284,7 +284,7 @@
 
 ## ⚠️ Critical Fix Implemented: JWT Algorithm Support
 
-**Issue Found**: Supabase was using **ES256** (asymmetric), but backend only accepted **HS256** (symmetric).
+**Issue Found**: Legacy Auth was using **ES256** (asymmetric), but backend only accepted **HS256** (symmetric).
 
 **JWKS Verification**:
 ```json
@@ -297,15 +297,15 @@
 ```
 
 **Solution Implemented** (in latest develop branch):
-- [x] `_get_jwks_keys()` function fetches + caches public keys from Supabase
+- [x] `_get_jwks_keys()` function fetches + caches public keys from Legacy Auth
 - [x] Token header inspection to determine algorithm
-- [x] **ES256 path**: Use JWKS public key (modern Supabase)
-- [x] **HS256 fallback**: Use symmetric SUPABASE_KEY (legacy)
+- [x] **ES256 path**: Use JWKS public key (modern Legacy Auth)
+- [x] **HS256 fallback**: Use symmetric LEGACY_AUTH_KEY (legacy)
 - [x] Applied to both:
   - `backend/app/api/deps.py` (REST authentication)
   - `backend/app/api/endpoints/realtime.py` (WebSocket authentication)
 
-**Status**: ✅ **PRODUCTION-READY** - Handles both modern and legacy Supabase configurations
+**Status**: ✅ **PRODUCTION-READY** - Handles both modern and legacy Legacy Auth configurations
 
 ---
 
@@ -376,7 +376,7 @@
 ### Happy Path (Fully Tested)
 
 1. ✅ **User Flow**
-   - Login via Supabase Auth
+   - Login via Legacy Auth Auth
    - Create meet request
    - Accept request
    - Session goes ACTIVE
