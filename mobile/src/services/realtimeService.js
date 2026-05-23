@@ -226,6 +226,7 @@ class RealtimeService extends EventEmitter {
         lon,
         accuracy_m,
         timestamp: new Date().toISOString(),
+        client_ts_ms: now,
       },
     };
 
@@ -234,6 +235,19 @@ class RealtimeService extends EventEmitter {
       this.lastLocationSentTime = now;
     }
     return sent;
+  }
+
+  /**
+   * Share the user's selected route mode with the peer.
+   * @param {string} mode - ORS profile string
+   * @returns {boolean}
+   */
+  sendRouteModeUpdate(mode) {
+    const payload = {
+      type: 'route_mode_update',
+      payload: { mode },
+    };
+    return this._sendMessage(payload);
   }
 
   /**
@@ -384,6 +398,10 @@ class RealtimeService extends EventEmitter {
             ...data.payload,
             receivedAt: new Date().toISOString(),
           });
+          break;
+
+        case 'peer_route_mode':
+          this.emit('peerRouteMode', data.payload);
           break;
 
         case 'session_ended':

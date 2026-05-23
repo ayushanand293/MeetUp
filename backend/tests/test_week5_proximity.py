@@ -2,17 +2,17 @@ from app.core.proximity import adaptive_threshold_m, haversine_distance_m, shoul
 
 
 def test_adaptive_threshold_clamps_to_minimum() -> None:
-    # Very accurate devices should still use at least 30m threshold.
-    assert adaptive_threshold_m(3.0, 6.0) == 30.0
+    # Very accurate devices should still use at least 5m threshold.
+    assert adaptive_threshold_m(3.0, 6.0) == 12.0
 
 
 def test_adaptive_threshold_scales_with_accuracy() -> None:
-    assert adaptive_threshold_m(18.0, 25.0) == 50.0
+    assert adaptive_threshold_m(18.0, 25.0) == 25.0
 
 
 def test_adaptive_threshold_clamps_to_maximum() -> None:
-    # Low accuracy should never exceed 60m threshold.
-    assert adaptive_threshold_m(80.0, 70.0) == 60.0
+    # Low accuracy should never exceed 25m threshold.
+    assert adaptive_threshold_m(80.0, 70.0) == 25.0
 
 
 def test_haversine_distance_reasonable_for_nearby_points() -> None:

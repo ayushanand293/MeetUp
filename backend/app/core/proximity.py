@@ -6,8 +6,8 @@ from math import asin, cos, radians, sin, sqrt
 def adaptive_threshold_m(
     acc_a_m: float,
     acc_b_m: float,
-    min_m: float = 30.0,
-    max_m: float = 60.0,
+    min_m: float = 5.0,
+    max_m: float = 25.0,
 ) -> float:
     """Compute adaptive meeting threshold in meters.
 

@@ -1,7 +1,7 @@
 import enum
 import uuid
 
-from sqlalchemy import Column, DateTime, Enum, ForeignKey, String
+from sqlalchemy import Column, DateTime, Enum, Float, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -28,6 +28,12 @@ class Session(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     ended_at = Column(DateTime(timezone=True), nullable=True)
     end_reason = Column(String, nullable=True)
+    destination_name = Column(Text, nullable=True)
+    destination_address = Column(Text, nullable=True)
+    destination_lat = Column(Float, nullable=True)
+    destination_lon = Column(Float, nullable=True)
+    destination_provider = Column(Text, nullable=True)
+    destination_place_id = Column(Text, nullable=True)
 
     participants = relationship("SessionParticipant", back_populates="session")
 

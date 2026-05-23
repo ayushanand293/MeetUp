@@ -6,12 +6,12 @@ psycopg2-binary
 asyncpg
 redis
 pydantic-settings
-pyjwt
-cryptography
-requests
-python-multipart
+pyjwt>=2.12.0
+cryptography>=46.0.7
+requests>=2.33.0
+python-multipart>=0.0.26
 httpx
-pytest
+pytest>=9.0.3
 httpx
 ruff
 gunicorn

@@ -3,22 +3,33 @@ from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from sqlalchemy.orm import Session
 
 from app.api import deps
 from app.core.database import get_db
+from app.core.destinations import (
+    DestinationPayload,
+    apply_destination,
+    copy_destination,
+    destination_from_model,
+    destination_validation_exception,
+)
 from app.core.idempotency import check_and_cache_idempotency, get_cached_response, get_idempotency_key
+from app.core.metrics import get_metrics
+from app.core.rate_limit import enforce_rate_limit
 from app.models.meet_request import MeetRequest, RequestStatus
 from app.models.session import Session as MeetSession
-from app.models.session import SessionParticipant, SessionStatus
+from app.models.session import ParticipantStatus, SessionParticipant, SessionStatus
 from app.models.user import User
+from app.models.user_block import UserBlock
 
 router = APIRouter()
 
 
 class CreateRequestBody(BaseModel):
     to_user_id: UUID
+    destination: dict | None = None
 
 
 def _is_expired(req: MeetRequest) -> bool:
@@ -46,13 +57,36 @@ def _expire_stale(db: Session):
         db.commit()
 
 
+def _display_name(user: User | None) -> str:
+    if not user:
+        return "Peer"
+
+    profile = user.profile_data or {}
+    preferred = profile.get("display_name") or profile.get("name")
+    if preferred:
+        return str(preferred)
+
+    if user.display_name:
+        return user.display_name
+
+    email_prefix = (user.email or "").split("@", 1)[0].strip()
+    if email_prefix:
+        return email_prefix.replace(".", " ").replace("_", " ").title()
+
+    if user.phone_e164:
+        return f"User {user.phone_e164[-4:]}"
+
+    return "Peer"
+
+
 @router.post("/", status_code=status.HTTP_201_CREATED)
-def create_meet_request(
+async def create_meet_request(
     body: CreateRequestBody | None = None,
     receiver_id: UUID | None = Query(default=None),
     db: Session = Depends(get_db),
     current_user: User = Depends(deps.get_current_user),
 ):
+    await enforce_rate_limit("request_create", current_user.id, 5, 60)
     receiver_id = (body.to_user_id if body else None) or receiver_id
 
     if receiver_id is None:
@@ -64,6 +98,31 @@ def create_meet_request(
     receiver = db.query(User).filter(User.id == receiver_id).first()
     if not receiver:
         raise HTTPException(status_code=404, detail="User not found")
+
+    # Hard guard: sender cannot create a new request while already in an active session.
+    sender_active_session = (
+        db.query(SessionParticipant)
+        .join(MeetSession, SessionParticipant.session_id == MeetSession.id)
+        .filter(
+            SessionParticipant.user_id == current_user.id,
+            SessionParticipant.status == ParticipantStatus.JOINED,
+            MeetSession.status == SessionStatus.ACTIVE,
+        )
+        .first()
+    )
+    if sender_active_session:
+        raise HTTPException(
+            status_code=409,
+            detail="You are already in an active session. End it before sending a new request.",
+        )
+
+    # BLOCK CHECK
+    existing_block = db.query(UserBlock).filter(
+        ((UserBlock.blocker_id == current_user.id) & (UserBlock.blocked_id == receiver_id)) |
+        ((UserBlock.blocker_id == receiver_id) & (UserBlock.blocked_id == current_user.id))
+    ).first()
+    if existing_block:
+        raise HTTPException(status_code=403, detail="Communication not allowed.")
 
     # Expire stale requests first
     _expire_stale(db)
@@ -100,10 +159,24 @@ def create_meet_request(
             detail="Request already being discussed. A request is pending from both directions. Accept or decline the existing request first."
         )
 
+    destination = None
+    if body and body.destination is not None:
+        try:
+            destination = DestinationPayload.model_validate(body.destination)
+        except ValidationError as exc:
+            raise destination_validation_exception(exc) from exc
+
     req = MeetRequest(requester_id=current_user.id, receiver_id=receiver_id)
+    try:
+        apply_destination(req, destination)
+    except ValueError as exc:
+        raise destination_validation_exception(exc) from exc
     db.add(req)
     db.commit()
     db.refresh(req)
+    if destination_from_model(req):
+        get_metrics().increment_counter("destination_selected_total")
+        get_metrics().increment_counter("destination_requests_sent_total")
     return req
 
 
@@ -130,7 +203,8 @@ def list_pending_requests(
             "created_at": r.created_at,
             "expires_at": r.expires_at,
             "requester_email": r.requester.email,
-            "requester_name": (r.requester.profile_data or {}).get("display_name", r.requester.email),
+            "requester_name": _display_name(r.requester),
+            "destination": destination_from_model(r),
         }
         for r in requests
     ]
@@ -141,13 +215,13 @@ def list_outgoing_requests(
     db: Session = Depends(get_db),
     current_user: User = Depends(deps.get_current_user),
 ):
-    """List outgoing meet requests sent by the current user (PENDING or ACCEPTED recently)."""
+    """List outgoing meet requests currently waiting for acceptance."""
     _expire_stale(db)
     requests = (
         db.query(MeetRequest)
         .filter(
             MeetRequest.requester_id == current_user.id,
-            MeetRequest.status.in_([RequestStatus.PENDING, RequestStatus.ACCEPTED]),
+            MeetRequest.status == RequestStatus.PENDING,
         )
         .order_by(MeetRequest.created_at.desc())
         .limit(10)
@@ -161,8 +235,9 @@ def list_outgoing_requests(
             "status": r.status,
             "created_at": r.created_at,
             "expires_at": r.expires_at,
-            "receiver_name": (r.receiver.profile_data or {}).get("display_name", r.receiver.email),
+            "receiver_name": _display_name(r.receiver),
             "receiver_email": r.receiver.email,
+            "destination": destination_from_model(r),
         }
         for r in requests
     ]
@@ -193,6 +268,14 @@ async def accept_request(
     if req.receiver_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized")
 
+    # BLOCK CHECK
+    existing_block = db.query(UserBlock).filter(
+        ((UserBlock.blocker_id == current_user.id) & (UserBlock.blocked_id == req.requester_id)) |
+        ((UserBlock.blocker_id == req.requester_id) & (UserBlock.blocked_id == current_user.id))
+    ).first()
+    if existing_block:
+        raise HTTPException(status_code=403, detail="Communication not allowed.")
+
     # Check expiry
     if _is_expired(req):
         req.status = RequestStatus.EXPIRED
@@ -217,18 +300,29 @@ async def accept_request(
     db.flush()
 
     session = MeetSession(status=SessionStatus.ACTIVE)
+    copy_destination(req, session)
     db.add(session)
     db.flush()
 
-    p1 = SessionParticipant(session_id=session.id, user_id=req.requester_id)
-    p2 = SessionParticipant(session_id=session.id, user_id=req.receiver_id)
+    p1 = SessionParticipant(
+        session_id=session.id,
+        user_id=req.requester_id,
+        status=ParticipantStatus.JOINED,
+    )
+    p2 = SessionParticipant(
+        session_id=session.id,
+        user_id=req.receiver_id,
+        status=ParticipantStatus.JOINED,
+    )
     db.add(p1)
     db.add(p2)
     db.commit()
     db.refresh(session)
+    if destination_from_model(session):
+        get_metrics().increment_counter("destination_sessions_started_total")
 
     requester = db.query(User).filter(User.id == req.requester_id).first()
-    requester_name = (requester.profile_data or {}).get("display_name", requester.email) if requester else "Peer"
+    requester_name = _display_name(requester)
 
     response = {
         "status": "accepted",

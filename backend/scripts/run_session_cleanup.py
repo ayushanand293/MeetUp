@@ -6,6 +6,7 @@ import argparse
 import asyncio
 
 from app.worker.session_cleanup import expire_stale_sessions
+from app.worker.session_cleanup import purge_retention_records
 
 
 def main() -> None:
@@ -19,7 +20,8 @@ def main() -> None:
     args = parser.parse_args()
 
     result = asyncio.run(expire_stale_sessions(stale_after_minutes=args.stale_after_minutes))
-    print(result)
+    retention = asyncio.run(purge_retention_records())
+    print({"stale_cleanup": result, "retention_cleanup": retention})
 
 
 if __name__ == "__main__":

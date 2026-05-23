@@ -1,304 +1,484 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
-    View, Text, TextInput, TouchableOpacity, StyleSheet,
-    Alert, ActivityIndicator, KeyboardAvoidingView, Platform,
-    ScrollView, Animated, Dimensions, Image,
+  Animated,
+  KeyboardAvoidingView,
+  LayoutAnimation,
+  Platform,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  TouchableWithoutFeedback,
+  UIManager,
+  View,
+  Alert,
+  ActivityIndicator,
+  Keyboard,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import * as Haptics from 'expo-haptics';
+
 import { useAuth } from '../context/AuthContext';
-import client from '../api/client';
-import { useTheme, Spacing, Radius, Font, anim } from '../theme';
+import PhoneNumberInput, {
+  buildE164Phone,
+  DEFAULT_COUNTRY_CODE,
+} from '../components/PhoneNumberInput';
+import OTPInput from '../components/OTPInput';
+import ParticleBackground from '../components/ParticleBackground';
+import { useTheme, Spacing, Radius, Font } from '../theme';
 
-const { width } = Dimensions.get('window');
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
 
-const LoginScreen = ({ navigation, route }) => {
-    const { colors } = useTheme();
-    const [activeTab, setActiveTab] = useState('email');
-    const [email, setEmail] = useState('');
-    const [password, setPassword] = useState('');
-    const [phone, setPhone] = useState('');
-    const [otp, setOtp] = useState('');
-    const [otpSent, setOtpSent] = useState(false);
-    const [focused, setFocused] = useState(null);
-    const { signInWithEmail, signInWithPhone, verifyPhoneOTP, loading, sessionInvalidatedElsewhere, clearSessionInvalidatedFlag } = useAuth();
+const RESEND_COOLDOWN = 30;
 
-    // Entrance animations
-    const logoScale = useRef(new Animated.Value(0.7)).current;
-    const logoOpacity = useRef(new Animated.Value(0)).current;
-    const cardY = useRef(new Animated.Value(40)).current;
-    const cardOpacity = useRef(new Animated.Value(0)).current;
-    const footerOpacity = useRef(new Animated.Value(0)).current;
-    const btnScale = useRef(new Animated.Value(1)).current;
-    const tabIndicator = useRef(new Animated.Value(0)).current;
-    const ambient = useRef(new Animated.Value(0)).current;
-
-    useEffect(() => {
-        Animated.sequence([
-            Animated.parallel([
-                Animated.spring(logoScale, { toValue: 1, useNativeDriver: true, tension: 60 }),
-                Animated.timing(logoOpacity, { toValue: 1, duration: 500, useNativeDriver: true }),
-            ]),
-            Animated.parallel([
-                Animated.spring(cardY, { toValue: 0, useNativeDriver: true, tension: 80, delay: 100 }),
-                Animated.timing(cardOpacity, { toValue: 1, duration: 400, useNativeDriver: true }),
-            ]),
-            Animated.timing(footerOpacity, { toValue: 1, duration: 300, useNativeDriver: true }),
-        ]).start();
-    }, []);
-
-    useEffect(() => {
-        const loop = Animated.loop(
-            Animated.sequence([
-                Animated.timing(ambient, { toValue: 1, duration: 2800, useNativeDriver: true }),
-                Animated.timing(ambient, { toValue: 0, duration: 2800, useNativeDriver: true }),
-            ])
-        );
-        loop.start();
-        return () => loop.stop();
-    }, [ambient]);
-
-    useEffect(() => {
-        Animated.spring(tabIndicator, {
-            toValue: activeTab === 'email' ? 0 : 1,
-            useNativeDriver: true, tension: 120, friction: 12,
-        }).start();
-    }, [activeTab]);
-
-    useEffect(() => {
-        if (sessionInvalidatedElsewhere) {
-            Alert.alert(
-                'Logged In Elsewhere',
-                'You\'ve logged in on another device. Your previous session has ended.',
-                [
-                    {
-                        text: 'OK',
-                        onPress: () => clearSessionInvalidatedFlag(),
-                    },
-                ]
-            );
-        }
-    }, [sessionInvalidatedElsewhere]);
-
-    const handleEmailLogin = async () => {
-        if (!email.trim() || !password) { Alert.alert('Missing fields', 'Enter your email and password'); return; }
-        try {
-            const data = await signInWithEmail(email.trim(), password);
-            try {
-                const name = route?.params?.pendingName || data?.user?.user_metadata?.display_name || email.split('@')[0];
-                await client.post('/users/profile', { display_name: name });
-            } catch (_) { }
-            // Sign out other devices after successful login
-            try {
-                await client.post('/auth/session/signout-other-devices');
-            } catch (_) {
-                // Silently fail - this is optional
-            }
-        } catch (error) {
-            let msg = error.message;
-            if (msg.includes('Email not confirmed')) msg = 'Please confirm your email. Check your inbox.';
-            else if (msg.includes('Invalid login credentials')) msg = 'Incorrect email or password.';
-            Alert.alert('Sign in failed', msg);
-        }
-    };
-
-    const handlePhoneLogin = async () => {
-        if (!phone.trim()) { Alert.alert('Missing field', 'Enter your phone number'); return; }
-        try { await signInWithPhone(phone.trim()); setOtpSent(true); }
-        catch (_) { Alert.alert('Could Not Send Code', 'Please check your phone number and try again.'); }
-    };
-
-    const handleVerifyOtp = async () => {
-        if (!otp.trim()) { Alert.alert('Missing field', 'Enter the OTP'); return; }
-        try {
-            await verifyPhoneOTP(phone.trim(), otp.trim());
-            // Sign out other devices after successful login
-            try {
-                await client.post('/auth/session/signout-other-devices');
-            } catch (_) {
-                // Silently fail - this is optional
-            }
-        }
-        catch (_) { Alert.alert('Invalid Code', 'Please check the code and try again.'); }
-    };
-
-    const s = makeStyles(colors);
-    const tabTranslateX = tabIndicator.interpolate({ inputRange: [0, 1], outputRange: [0, (width - Spacing.lg * 2 - Spacing.lg * 2 - 6) / 2] });
-    const ambientUp = ambient.interpolate({ inputRange: [0, 1], outputRange: [0, -12] });
-    const ambientDown = ambient.interpolate({ inputRange: [0, 1], outputRange: [0, 8] });
-
-    return (
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={[s.root, { backgroundColor: colors.bg }]}>
-            <Animated.View
-                pointerEvents="none"
-                style={{
-                    position: 'absolute',
-                    width: 220,
-                    height: 220,
-                    borderRadius: 110,
-                    top: -80,
-                    right: -70,
-                    backgroundColor: colors.accentBg,
-                    opacity: 0.95,
-                    transform: [{ translateY: ambientUp }],
-                }}
-            />
-            <Animated.View
-                pointerEvents="none"
-                style={{
-                    position: 'absolute',
-                    width: 180,
-                    height: 180,
-                    borderRadius: 90,
-                    bottom: 60,
-                    left: -70,
-                    backgroundColor: colors.surfaceGlass,
-                    opacity: 0.7,
-                    transform: [{ translateY: ambientDown }],
-                }}
-            />
-
-            <ScrollView contentContainerStyle={s.scroll} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-
-                {/* Logo */}
-                <Animated.View style={[s.logoArea, { opacity: logoOpacity, transform: [{ scale: logoScale }] }]}>
-                    <View style={[s.logoMark, { backgroundColor: colors.surface, borderColor: colors.border }]}> 
-                        <Image source={require('../../assets/Meet up logo.png')} style={s.logoImage} resizeMode="contain" />
-                    </View>
-                    <Text style={[Font.display, { color: colors.textPrimary, letterSpacing: -0.8 }]}>MeetUp</Text>
-                    <Text style={[Font.body, { color: colors.textSecondary, marginTop: 6, textAlign: 'center', fontWeight: '600' }]}> 
-                        Sync your world in seconds.
-                    </Text>
-                </Animated.View>
-
-                {/* Card */}
-                <Animated.View style={[s.card, {
-                    backgroundColor: colors.surface,
-                    borderColor: colors.border,
-                    opacity: cardOpacity,
-                    transform: [{ translateY: cardY }],
-                    shadowColor: colors.textPrimary,
-                    shadowOpacity: 0.08,
-                    shadowOffset: { width: 0, height: 10 },
-                    shadowRadius: 16,
-                    elevation: 5,
-                }]}> 
-                    <Text style={[Font.title, { color: colors.textPrimary, marginBottom: 6 }]}>Welcome back</Text>
-                    <Text style={[Font.caption, { color: colors.textMuted, marginBottom: Spacing.lg }]}>SIGN IN TO CONTINUE</Text>
-
-                    {/* Tab switcher */}
-                    <View style={[s.tabRow, { backgroundColor: colors.surfaceElevated }]}> 
-                        <Animated.View style={[s.tabSlider, { backgroundColor: colors.borderLight, transform: [{ translateX: tabTranslateX }] }]} />
-                        {['email', 'phone'].map(tab => (
-                            <TouchableOpacity key={tab} style={s.tab} onPress={() => { setActiveTab(tab); setOtpSent(false); }}>
-                                <Text style={[Font.caption, { color: activeTab === tab ? colors.textPrimary : colors.textMuted, fontWeight: activeTab === tab ? '700' : '500' }]}>
-                                    {tab === 'email' ? 'Email' : 'Phone'}
-                                </Text>
-                            </TouchableOpacity>
-                        ))}
-                    </View>
-
-                    {activeTab === 'email' ? (
-                        <>
-                            <Field label="EMAIL" value={email} onChangeText={setEmail} placeholder="you@example.com"
-                                keyboardType="email-address" autoCapitalize="none" colors={colors} focused={focused === 'email'}
-                                onFocus={() => setFocused('email')} onBlur={() => setFocused(null)} />
-                            <Field label="PASSWORD" value={password} onChangeText={setPassword} placeholder="••••••••"
-                                secureTextEntry colors={colors} focused={focused === 'pass'}
-                                onFocus={() => setFocused('pass')} onBlur={() => setFocused(null)}
-                                right={<TouchableOpacity onPress={() => navigation.navigate('ForgotPassword')}><Text style={[Font.caption, { color: colors.textPrimary }]}>Forgot?</Text></TouchableOpacity>} />
-                            <AnimBtn label="Sign In" loading={loading} onPress={handleEmailLogin} colors={colors} scale={btnScale} />
-                        </>
-                    ) : !otpSent ? (
-                        <>
-                            <Field label="PHONE" value={phone} onChangeText={setPhone} placeholder="+91 98765 43210"
-                                keyboardType="phone-pad" colors={colors} focused={focused === 'phone'}
-                                onFocus={() => setFocused('phone')} onBlur={() => setFocused(null)} />
-                            <AnimBtn label="Send Code" loading={loading} onPress={handlePhoneLogin} colors={colors} scale={btnScale} />
-                        </>
-                    ) : (
-                        <>
-                            <Text style={[Font.body, { color: colors.textSecondary, textAlign: 'center', marginBottom: Spacing.md }]}>Code sent to {phone}</Text>
-                            <Field label="CODE" value={otp} onChangeText={setOtp} placeholder="000000"
-                                keyboardType="number-pad" colors={colors} focused={focused === 'otp'}
-                                onFocus={() => setFocused('otp')} onBlur={() => setFocused(null)} />
-                            <AnimBtn label="Verify & Sign In" loading={loading} onPress={handleVerifyOtp} colors={colors} scale={btnScale} />
-                        </>
-                    )}
-                </Animated.View>
-
-                <Animated.View style={[s.footer, { opacity: footerOpacity }]}>
-                    <Text style={[Font.body, { color: colors.textSecondary }]}>Don't have an account? </Text>
-                    <TouchableOpacity onPress={() => navigation.navigate('Register')}>
-                        <Text style={[Font.body, { color: colors.textPrimary, fontWeight: '700' }]}>Create one</Text>
-                    </TouchableOpacity>
-                </Animated.View>
-            </ScrollView>
-        </KeyboardAvoidingView>
-    );
+/** Parse API errors into user-friendly messages */
+const parseErrorMessage = (error) => {
+  const status = error?.response?.status;
+  const detail = error?.response?.data?.detail;
+  if (status === 429) return 'Too many attempts. Please wait a moment and try again.';
+  if (status === 401) return 'Invalid code. Please check and try again.';
+  if (status === 404) return 'Phone number not found. Please check your number.';
+  if (status === 400) return detail || 'Invalid request. Please try again.';
+  if (detail) return detail;
+  if (error?.message?.includes('Network')) return 'No internet connection. Please check your network.';
+  if (error?.message?.includes('timeout')) return 'Request timed out. Please try again.';
+  return 'Something went wrong. Please try again.';
 };
 
-/* ---- Shared sub-components ---- */
+const LoginScreen = ({ navigation }) => {
+  const { colors, isDark } = useTheme();
+  const {
+    signInWithPhone,
+    verifyPhoneOTP,
+    loading,
+    sessionInvalidatedElsewhere,
+    clearSessionInvalidatedFlag,
+  } = useAuth();
 
-const Field = ({ label, right, focused, colors, ...props }) => (
-    <View style={{ marginBottom: Spacing.md }}>
-        <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
-            <Text style={[Font.label, { color: colors.textMuted }]}>{label}</Text>
-            {right}
-        </View>
-            <TextInput
-            style={{
-                backgroundColor: colors.surfaceSoft || colors.inputBg, borderWidth: 1,
-                borderColor: focused ? colors.textMuted : colors.border,
-                borderRadius: Radius.md, padding: 14, color: colors.textPrimary, fontSize: 15,
-            }}
-            placeholderTextColor={colors.textMuted} {...props}
-        />
+  const [countryCode, setCountryCode] = useState(DEFAULT_COUNTRY_CODE);
+  const [phone, setPhone] = useState('');
+  const [otp, setOtp] = useState('');
+  const [otpSent, setOtpSent] = useState(false);
+  const [resendTimer, setResendTimer] = useState(0);
+  const [otpError, setOtpError] = useState('');
+
+  const phoneE164 = buildE164Phone(countryCode, phone);
+  const red = '#B1121B';
+
+  /* ── refs ── */
+  const particleRef = useRef(null);
+  const otpRef = useRef(null);
+
+  /* ── entrance animations ── */
+  const heroOpacity = useRef(new Animated.Value(0)).current;
+  const heroTranslateY = useRef(new Animated.Value(-16)).current;
+  const cardOpacity = useRef(new Animated.Value(0)).current;
+  const cardTranslateY = useRef(new Animated.Value(32)).current;
+
+  useEffect(() => {
+    Animated.stagger(140, [
+      Animated.parallel([
+        Animated.timing(heroOpacity, { toValue: 1, duration: 450, useNativeDriver: true }),
+        Animated.spring(heroTranslateY, { toValue: 0, tension: 55, friction: 10, useNativeDriver: true }),
+      ]),
+      Animated.parallel([
+        Animated.timing(cardOpacity, { toValue: 1, duration: 380, useNativeDriver: true }),
+        Animated.spring(cardTranslateY, { toValue: 0, tension: 55, friction: 10, useNativeDriver: true }),
+      ]),
+    ]).start();
+  }, [heroOpacity, heroTranslateY, cardOpacity, cardTranslateY]);
+
+  /* ── resend countdown ── */
+  useEffect(() => {
+    if (resendTimer <= 0) return;
+    const interval = setInterval(() => {
+      setResendTimer((prev) => {
+        if (prev <= 1) { clearInterval(interval); return 0; }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [resendTimer]);
+
+  /* ── handlers ── */
+  const handlePhoneLogin = async () => {
+    if (!phoneE164) {
+      Alert.alert('Missing field', 'Select a country code and enter your phone number.');
+      return;
+    }
+    try {
+      const result = await signInWithPhone(phoneE164);
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      setOtpSent(true);
+      setResendTimer(RESEND_COOLDOWN);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+      const devCodeMessage = result?.dev_otp_code ? `\n\nLocal dev code: ${result.dev_otp_code}` : '';
+      Alert.alert('Code sent', `Enter the 6 digit OTP to continue.${devCodeMessage}`);
+    } catch (error) {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {});
+      Alert.alert('Could not send code', parseErrorMessage(error));
+    }
+  };
+
+  const handleVerifyOtp = useCallback(
+    async (code) => {
+      const finalCode = code || otp;
+      if (!finalCode.trim()) return;
+      setOtpError('');
+      try {
+        await verifyPhoneOTP(phoneE164, finalCode.trim());
+      } catch (error) {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {});
+        const msg = parseErrorMessage(error);
+        setOtpError(msg);
+        setOtp('');
+        otpRef.current?.shake();
+        setTimeout(() => otpRef.current?.focus(), 400);
+      }
+    },
+    [otp, phoneE164, verifyPhoneOTP],
+  );
+
+  const handleResend = async () => {
+    if (resendTimer > 0 || loading) return;
+    try {
+      const result = await signInWithPhone(phoneE164);
+      setResendTimer(RESEND_COOLDOWN);
+      setOtp('');
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+      const devCodeMessage = result?.dev_otp_code ? `\n\nLocal dev code: ${result.dev_otp_code}` : '';
+      Alert.alert('Code resent', `A new OTP has been sent.${devCodeMessage}`);
+    } catch (error) {
+      Alert.alert('Could not resend', parseErrorMessage(error));
+    }
+  };
+
+  const handleChangeNumber = () => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setOtpSent(false);
+    setOtp('');
+    setResendTimer(0);
+  };
+  /* ── session invalidation — show inline notice, don't block ── */
+  const [sessionNotice, setSessionNotice] = useState('');
+
+  useEffect(() => {
+    if (sessionInvalidatedElsewhere) {
+      setSessionNotice('You were signed out because your account was accessed from another device.');
+      clearSessionInvalidatedFlag();
+    }
+  }, [sessionInvalidatedElsewhere, clearSessionInvalidatedFlag]);
+
+  /* ── touch forwarding to particles ── */
+  const handleTouch = (e) => particleRef.current?.scatter(e.nativeEvent.pageX, e.nativeEvent.pageY);
+  const handleTouchEnd = () => particleRef.current?.release();
+
+  return (
+    <View
+      style={[styles.root, { backgroundColor: colors.bg }]}
+      onTouchStart={handleTouch}
+      onTouchMove={handleTouch}
+      onTouchEnd={handleTouchEnd}
+    >
+      <ParticleBackground
+        ref={particleRef}
+        count={40}
+        dotColor={isDark ? 'rgba(177,18,27,0.40)' : 'rgba(177,18,27,0.35)'}
+        dotColorAlt={isDark ? 'rgba(255,255,255,0.25)' : 'rgba(100,100,100,0.25)'}
+        lineColor={isDark ? 'rgba(177,18,27,0.10)' : 'rgba(177,18,27,0.06)'}
+      />
+
+      <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.keyboardView}
+        >
+          <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
+            <View style={styles.inner}>
+
+              {/* ── Hero ── */}
+              <Animated.View
+                style={[
+                  styles.heroArea,
+                  { opacity: heroOpacity, transform: [{ translateY: heroTranslateY }] },
+                ]}
+              >
+                <View style={styles.heroRow}>
+                  <Text style={[styles.brandName, { color: isDark ? '#FFFFFF' : colors.textPrimary }]}>
+                    Meet<Text style={{ color: red }}>Up</Text>
+                  </Text>
+                </View>
+                <Text style={[styles.heroTitle, { color: isDark ? '#FFFFFF' : colors.textPrimary }]}>
+                  Login
+                </Text>
+                <Text style={[styles.heroSubtitle, { color: colors.textSecondary }]}>
+                  Enter your phone number to continue
+                </Text>
+              </Animated.View>
+
+              {/* ── Session notice banner ── */}
+              {sessionNotice !== '' && (
+                <View style={[styles.noticeBanner, {
+                  backgroundColor: isDark ? 'rgba(177,18,27,0.12)' : 'rgba(177,18,27,0.06)',
+                  borderColor: isDark ? 'rgba(177,18,27,0.25)' : 'rgba(177,18,27,0.15)',
+                }]}>
+                  <Text style={[styles.noticeText, { color: isDark ? '#FF8A8A' : '#8B0000' }]}>
+                    {sessionNotice}
+                  </Text>
+                  <TouchableOpacity onPress={() => setSessionNotice('')} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                    <Text style={{ color: isDark ? '#FF8A8A' : '#8B0000', fontSize: 16, fontWeight: '700' }}>✕</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+
+              {/* ── Card ── */}
+              <Animated.View
+                style={[
+                  styles.cardWrap,
+                  { opacity: cardOpacity, transform: [{ translateY: cardTranslateY }] },
+                ]}
+              >
+                <View style={[styles.card, {
+                  backgroundColor: colors.surface,
+                  borderColor: colors.border,
+                  shadowColor: isDark ? '#000' : 'rgba(0,0,0,0.06)',
+                }]}>
+
+                  {!otpSent ? (
+                    <>
+                      <Text style={[styles.cardTitle, { color: colors.textPrimary }]}>
+                        Phone number
+                      </Text>
+                      <Text style={[styles.cardSubtitle, { color: colors.textMuted }]}>
+                        Select country code and enter your number
+                      </Text>
+
+                      <PhoneNumberInput
+                        countryCode={countryCode}
+                        localNumber={phone}
+                        onCountryCodeChange={setCountryCode}
+                        onLocalNumberChange={(text) => {
+                          setPhone(text);
+                          setOtpSent(false);
+                          setOtp('');
+                        }}
+                        editable={!loading}
+                      />
+
+                      <TouchableOpacity
+                        style={[styles.primaryButton, { backgroundColor: red, opacity: loading ? 0.65 : 1 }]}
+                        onPress={handlePhoneLogin}
+                        disabled={loading}
+                        activeOpacity={0.8}
+                      >
+                        {loading ? (
+                          <ActivityIndicator color="#FFFFFF" />
+                        ) : (
+                          <Text style={styles.primaryButtonLabel}>Continue</Text>
+                        )}
+                      </TouchableOpacity>
+                    </>
+                  ) : (
+                    <>
+                      <Text style={[styles.cardTitle, { color: colors.textPrimary }]}>
+                        Verification code
+                      </Text>
+                      <Text style={[styles.cardSubtitle, { color: colors.textMuted }]}>
+                        Sent to {countryCode.dialCode} {phone}
+                      </Text>
+
+                      <OTPInput
+                        ref={otpRef}
+                        value={otp}
+                        onChangeText={(text) => {
+                          setOtp(text);
+                          if (otpError) setOtpError('');
+                        }}
+                        onComplete={handleVerifyOtp}
+                        editable={!loading}
+                        error={otpError}
+                      />
+
+                      {loading && (
+                        <View style={styles.verifyingRow}>
+                          <ActivityIndicator color={red} size="small" />
+                          <Text style={[Font.caption, { color: colors.textMuted, marginLeft: 8 }]}>
+                            Verifying…
+                          </Text>
+                        </View>
+                      )}
+
+                      <View style={styles.otpActions}>
+                        <TouchableOpacity
+                          onPress={handleResend}
+                          disabled={resendTimer > 0 || loading}
+                          activeOpacity={0.7}
+                        >
+                          <Text style={[styles.actionText, {
+                            color: resendTimer > 0 ? colors.textMuted : red,
+                          }]}>
+                            {resendTimer > 0 ? `Resend in ${resendTimer}s` : 'Resend code'}
+                          </Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity onPress={handleChangeNumber} activeOpacity={0.7}>
+                          <Text style={[styles.actionText, { color: colors.textSecondary }]}>
+                            Change number
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                    </>
+                  )}
+                </View>
+
+                {/* ── Bottom CTA ── */}
+                {!otpSent && (
+                  <TouchableOpacity
+                    onPress={() => navigation.navigate('Register')}
+                    style={styles.bottomCta}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={[styles.bottomCtaText, { color: colors.textMuted }]}>
+                      New here?{' '}
+                      <Text style={{ color: red, fontWeight: '700' }}>
+                        Create your account
+                      </Text>
+                    </Text>
+                  </TouchableOpacity>
+                )}
+              </Animated.View>
+
+            </View>
+          </TouchableWithoutFeedback>
+        </KeyboardAvoidingView>
+      </SafeAreaView>
     </View>
-);
+  );
+};
 
-const AnimBtn = ({ label, loading: isLoading, onPress, colors, scale }) => (
-    <Animated.View style={{ transform: [{ scale }] }}>
-        <TouchableOpacity
-            style={{
-                backgroundColor: colors.textPrimary, borderRadius: Radius.md,
-                paddingVertical: 15, alignItems: 'center', marginTop: Spacing.sm,
-                shadowColor: colors.textPrimary,
-                shadowOpacity: 0.08,
-                shadowOffset: { width: 0, height: 8 },
-                shadowRadius: 12,
-                elevation: 3,
-            }}
-            onPressIn={() => anim.pressIn(scale)} onPressOut={() => anim.pressOut(scale)}
-            onPress={onPress} disabled={isLoading}>
-            {isLoading ? <ActivityIndicator color={colors.bg} /> : <Text style={{ color: colors.bg, fontSize: 15, fontWeight: '700', letterSpacing: 0.3 }}>{label}</Text>}
-        </TouchableOpacity>
-    </Animated.View>
-);
+const styles = StyleSheet.create({
+  root: { flex: 1 },
+  safe: { flex: 1 },
+  keyboardView: { flex: 1 },
+  inner: {
+    flex: 1,
+    justifyContent: 'center',
+    paddingHorizontal: Spacing.lg,
+  },
 
-const makeStyles = (c) => StyleSheet.create({
-    root: { flex: 1 },
-    scroll: { flexGrow: 1, padding: Spacing.lg, justifyContent: 'center' },
-    logoArea: { alignItems: 'center', marginBottom: Spacing.xl },
-    logoMark: {
-        width: 92, height: 92, borderRadius: 24, borderWidth: 1.5,
-        justifyContent: 'center', alignItems: 'center', marginBottom: Spacing.md,
-        shadowColor: c.textPrimary,
-        shadowOpacity: 0.09,
-        shadowRadius: 14,
-        shadowOffset: { width: 0, height: 8 },
-        elevation: 4,
-    },
-    logoImage: { width: 72, height: 72 },
-    card: { borderRadius: Radius.xl, padding: Spacing.lg, borderWidth: 1 },
-    tabRow: {
-        flexDirection: 'row', borderRadius: Radius.md, padding: 3,
-        marginBottom: Spacing.lg, position: 'relative', overflow: 'hidden',
-    },
-    tabSlider: {
-        position: 'absolute', top: 3, left: 3,
-        width: '50%', height: '100%', borderRadius: Radius.sm,
-    },
-    tab: { flex: 1, paddingVertical: 9, alignItems: 'center', zIndex: 1 },
-    footer: { flexDirection: 'row', justifyContent: 'center', marginTop: Spacing.xl },
+  /* Hero */
+  heroArea: {
+    marginBottom: Spacing.lg,
+  },
+  heroRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 2,
+  },
+  brandName: {
+    fontSize: 18,
+    fontWeight: '800',
+    letterSpacing: 0.3,
+  },
+  heroTitle: {
+    fontSize: 34,
+    fontWeight: '900',
+    letterSpacing: -0.6,
+  },
+  heroSubtitle: {
+    fontSize: 15,
+    marginTop: 4,
+    lineHeight: 21,
+  },
+
+  /* Session notice */
+  noticeBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    marginBottom: Spacing.md,
+    gap: 10,
+  },
+  noticeText: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '500',
+    lineHeight: 18,
+  },
+
+  /* Card */
+  cardWrap: {},
+  card: {
+    borderWidth: 1,
+    borderRadius: 24,
+    padding: Spacing.lg,
+    shadowOpacity: 0.15,
+    shadowOffset: { width: 0, height: 12 },
+    shadowRadius: 28,
+    elevation: 6,
+  },
+  cardTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+    letterSpacing: -0.2,
+  },
+  cardSubtitle: {
+    fontSize: 13,
+    marginTop: 3,
+    marginBottom: Spacing.xs,
+    lineHeight: 18,
+  },
+
+  /* Primary button */
+  primaryButton: {
+    marginTop: Spacing.lg,
+    borderRadius: Radius.pill,
+    paddingVertical: 15,
+    alignItems: 'center',
+    shadowColor: '#B1121B',
+    shadowOpacity: 0.25,
+    shadowOffset: { width: 0, height: 6 },
+    shadowRadius: 14,
+    elevation: 5,
+  },
+  primaryButtonLabel: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '700',
+    letterSpacing: 0.3,
+  },
+
+  /* OTP */
+  verifyingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: Spacing.md,
+  },
+  otpActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: Spacing.lg,
+  },
+  actionText: {
+    fontSize: 13,
+    fontWeight: '600',
+  },
+
+  /* Bottom CTA */
+  bottomCta: {
+    marginTop: Spacing.lg,
+    alignItems: 'center',
+  },
+  bottomCtaText: {
+    fontSize: 13,
+    fontWeight: '500',
+  },
 });
 
 export default LoginScreen;

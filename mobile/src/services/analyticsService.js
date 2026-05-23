@@ -8,15 +8,39 @@
  */
 
 import client from '../api/client';
+import { CLIENT_ANALYTICS_ENABLED } from '../config';
 
 const DEBUG = process.env.NODE_ENV !== 'production';
 
 const ANALYTICS_ENDPOINT = '/analytics/events';
+const BLOCKED_METADATA_KEYS = [
+  'address',
+  'coord',
+  'email',
+  'id',
+  'lat',
+  'location',
+  'lon',
+  'lng',
+  'name',
+  'phone',
+  'place',
+  'request',
+  'session',
+  'token',
+  'user',
+];
+
+const isBlockedMetadataKey = (key) => {
+  const normalized = String(key || '').toLowerCase();
+  return BLOCKED_METADATA_KEYS.some((blocked) => normalized.includes(blocked));
+};
 
 const sanitize = (data = {}) => {
   const out = {};
   Object.entries(data).forEach(([key, value]) => {
     if (value === undefined) return;
+    if (isBlockedMetadataKey(key)) return;
     if (typeof value === 'string' && value.length > 512) {
       out[key] = `${value.slice(0, 512)}...`;
       return;
@@ -28,11 +52,21 @@ const sanitize = (data = {}) => {
 
 const track = async (eventName, metadata = {}) => {
   if (!eventName) return;
+  if (!CLIENT_ANALYTICS_ENABLED) return;
+
+  const properties = sanitize(metadata);
 
   const payload = {
-    event: eventName,
-    ts: new Date().toISOString(),
-    metadata: sanitize(metadata),
+    events: [
+      {
+        event_name: eventName,
+        session_id: null,
+        properties: {
+          ...properties,
+          ts: new Date().toISOString(),
+        },
+      },
+    ],
   };
 
   if (DEBUG) {

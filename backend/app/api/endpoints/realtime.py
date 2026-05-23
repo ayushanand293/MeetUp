@@ -9,12 +9,16 @@ from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect, status
 from jwt import PyJWTError
 
 from app.core.config import settings
+from app.core.auth_sessions import enforce_active_session
 from app.core.metrics import (
+    track_location_propagation_latency_ms,
     track_message_received,
     track_rate_limit_hit,
     track_validation_error,
 )
+from app.core.rate_limit import check_rate_limit
 from app.core.redis import get_redis
+from app.core.scrub import scrub_sensitive
 from app.core.validation import validate_location_update
 from app.realtime.connection_manager import manager
 from app.realtime.schemas import (
@@ -24,13 +28,16 @@ from app.realtime.schemas import (
     LocationUpdateEvent,
     PeerLocationEvent,
     PeerLocationPayload,
+    PeerRouteModeEvent,
+    PeerRouteModePayload,
+    RouteModeUpdateEvent,
     EndSessionEvent,
     SessionEndedEvent,
     SessionEndedPayload,
 )
 
 from fastapi.concurrency import run_in_threadpool
-from app.api.endpoints.realtime_helpers import end_session_sync
+from app.api.endpoints.realtime_helpers import end_session_sync, is_session_participant_sync
 from app.core.proximity import adaptive_threshold_m, haversine_distance_m, should_auto_end
 
 logger = logging.getLogger(__name__)
@@ -40,6 +47,45 @@ RATE_LIMIT_MESSAGES_PER_SEC = 10
 RATE_LIMIT_WINDOW_SEC = 1
 
 router = APIRouter()
+LAST_LOCATION_TTL_SECONDS = 600
+ROUTE_MODE_TTL_SECONDS = 7200
+
+
+async def _store_last_known_location(redis_client, session_uuid: UUID, user_id: UUID, payload) -> None:
+    loc_payload = payload.model_dump()
+    loc_payload["timestamp"] = loc_payload["timestamp"].isoformat()
+    await redis_client.setex(f"loc:{session_uuid}:{user_id}", LAST_LOCATION_TTL_SECONDS, json.dumps(loc_payload))
+
+
+async def _store_route_mode(redis_client, session_uuid: UUID, user_id: UUID, mode: str) -> None:
+    await redis_client.setex(f"route_mode:{session_uuid}:{user_id}", ROUTE_MODE_TTL_SECONDS, mode)
+
+
+async def _send_cached_peer_route_modes(redis_client, websocket: WebSocket, session_uuid: UUID, user_id: UUID) -> None:
+    cursor = 0
+    while True:
+        cursor, keys = await redis_client.scan(cursor, match=f"route_mode:{session_uuid}:*")
+        for key in keys:
+            key_str = key.decode() if isinstance(key, bytes) else key
+            peer_id = key_str.split(":")[-1]
+            if peer_id == str(user_id):
+                continue
+
+            raw_mode = await redis_client.get(key)
+            if not raw_mode:
+                continue
+
+            mode = raw_mode.decode() if isinstance(raw_mode, bytes) else raw_mode
+            peer_mode_event = PeerRouteModeEvent(
+                payload=PeerRouteModePayload(
+                    user_id=UUID(peer_id),
+                    mode=mode,
+                )
+            )
+            await websocket.send_text(peer_mode_event.model_dump_json())
+
+        if cursor == 0:
+            break
 
 
 @router.websocket("/meetup")
@@ -71,11 +117,29 @@ async def websocket_endpoint(
                 raise ValueError(f"Unknown key ID: {kid}")
             payload = jwt.decode(token, public_key, algorithms=["ES256"], options={"verify_aud": False})
         else:
-            payload = jwt.decode(token, settings.SUPABASE_KEY, algorithms=["HS256"], options={"verify_aud": False})
+            payload = None
+            secrets_to_try = [settings.SUPABASE_KEY]
+            if settings.AUTH_JWT_SECRET:
+                secrets_to_try.insert(0, settings.AUTH_JWT_SECRET)
+            for decode_secret in secrets_to_try:
+                if not decode_secret:
+                    continue
+                try:
+                    payload = jwt.decode(token, decode_secret, algorithms=["HS256"], options={"verify_aud": False})
+                    break
+                except PyJWTError:
+                    continue
+            if payload is None:
+                raise ValueError("Could not validate credentials")
 
         user_id = UUID(payload.get("sub"))
+        if payload.get("iss") == "meetup-otp":
+            try:
+                enforce_active_session(str(user_id), payload.get("sid"))
+            except Exception as exc:
+                raise ValueError("Session invalidated") from exc
     except (PyJWTError, ValueError) as e:
-        logger.warning(f"WebSocket Auth Failed: {e}")
+        logger.warning(scrub_sensitive(f"WebSocket Auth Failed: {e}"))
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
 
@@ -86,12 +150,19 @@ async def websocket_endpoint(
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
 
+    is_participant = await run_in_threadpool(is_session_participant_sync, session_uuid, user_id)
+    if not is_participant:
+        logger.warning(scrub_sensitive(f"WebSocket Auth Failed: user {user_id} is not an active participant in session {session_uuid}"))
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+
     # 3. Connect User to Session Room
     await manager.connect(session_uuid, user_id, websocket)
 
     # Track previous location for jump detection
     prev_location = None
     redis_client = await get_redis()
+    await _send_cached_peer_route_modes(redis_client, websocket, session_uuid, user_id)
 
     try:
         while True:
@@ -122,7 +193,45 @@ async def websocket_endpoint(
                             await websocket.send_text(error_event.model_dump_json())
                             continue
 
-                    # 6. Parse and validate location update
+                    # 6. Short-window rate limit (e.g. 60 updates per minute)
+                    # This protects against short bursts and keeps Redis traffic sane.
+                    # Fail-closed is handled internally by check_rate_limit.
+                    loc_limit_allowed = await check_rate_limit(
+                        key_prefix="location_updates",
+                        identifier=f"{session_uuid}:{user_id}",
+                        limit=60,
+                        window_seconds=60
+                    )
+                    if not loc_limit_allowed:
+                        track_rate_limit_hit()
+                        error_event = ErrorEvent(
+                            payload=ErrorPayload(
+                                code="RATE_LIMIT_EXCEEDED",
+                                message="Too many updates. Maximum 60 per minute.",
+                            )
+                        )
+                        await websocket.send_text(error_event.model_dump_json())
+                        continue
+
+                    # 6. Session-wide cap (e.g. max 2000 updates per session per user)
+                    total_updates_key = f"total_updates:{session_uuid}:{user_id}"
+                    total_updates = await redis_client.incr(total_updates_key)
+                    if total_updates == 1:
+                        # Set TTL for total updates (expire shortly after session TTL)
+                        await redis_client.expire(total_updates_key, 7200) # 2 hours
+
+                    if total_updates > 2000:
+                        track_rate_limit_hit()
+                        error_event = ErrorEvent(
+                            payload=ErrorPayload(
+                                code="SESSION_CAP_EXCEEDED",
+                                message="Session limit reached. Maximum 2000 updates per session.",
+                            )
+                        )
+                        await websocket.send_text(error_event.model_dump_json())
+                        continue
+
+                    # 7. Parse and validate location update
                     try:
                         location_event = LocationUpdateEvent(**event_data)
                     except Exception as e:
@@ -147,7 +256,7 @@ async def websocket_endpoint(
                         track_validation_error("location_validation")
                         error_event = ErrorEvent(payload=ErrorPayload(code="INVALID_LOCATION", message=error_msg))
                         await websocket.send_text(error_event.model_dump_json())
-                        logger.warning(f"Invalid location from {user_id}: {error_msg}")
+                        logger.warning(scrub_sensitive(f"Invalid location from {user_id}: {error_msg}"))
                         continue
 
                     # 8. Update previous location for next iteration
@@ -165,13 +274,23 @@ async def websocket_endpoint(
                     # Broadcast to everyone in session EXCEPT sender
                     await manager.broadcast(session_uuid, peer_event.model_dump_json(), exclude_user=user_id)
 
-                    # 10. Write Location and Throttle tracking to Redis (Week 4)
+                    # Emit location_propagation_latency_ms: time from payload timestamp to broadcast
+                    _now_dt = datetime.utcnow()
+                    _payload_ts = payload.timestamp
+                    # payload.timestamp is already a validated datetime; make both naive for subtraction
+                    if _payload_ts.tzinfo is not None:
+                        _payload_ts = _payload_ts.replace(tzinfo=None)
+                    _prop_latency_ms = max(0.0, (_now_dt - _payload_ts).total_seconds() * 1000)
+                    track_location_propagation_latency_ms(
+                        session_id=str(session_uuid),
+                        user_id=str(user_id),
+                        latency_ms=_prop_latency_ms,
+                    )
+
                     now_ts = datetime.utcnow().timestamp()
                     await redis_client.setex(last_update_key, 3, str(now_ts))
                     
-                    loc_payload = payload.model_dump()
-                    loc_payload["timestamp"] = loc_payload["timestamp"].isoformat()
-                    await redis_client.setex(f"loc:{session_uuid}:{user_id}", 120, json.dumps(loc_payload))
+                    await _store_last_known_location(redis_client, session_uuid, user_id, payload)
 
                     # 11. Geo-Intelligence Proximity Check (Week 5)
                     cursor = 0
@@ -225,14 +344,32 @@ async def websocket_endpoint(
                             except Exception as e:
                                 logger.error(f"Error during proximity check: {e}", exc_info=True)
 
+                elif event_type == EventType.ROUTE_MODE_UPDATE:
+                    try:
+                        route_mode_event = RouteModeUpdateEvent(**event_data)
+                        await _store_route_mode(redis_client, session_uuid, user_id, route_mode_event.payload.mode)
+                        peer_mode_event = PeerRouteModeEvent(
+                            payload=PeerRouteModePayload(
+                                user_id=user_id,
+                                mode=route_mode_event.payload.mode,
+                            )
+                        )
+                        await manager.broadcast(session_uuid, peer_mode_event.model_dump_json(), exclude_user=user_id)
+                    except Exception as e:
+                        track_validation_error("route_mode_parse_error")
+                        error_event = ErrorEvent(
+                            payload=ErrorPayload(code="INVALID_PAYLOAD", message=f"Failed to parse route mode: {str(e)}")
+                        )
+                        await websocket.send_text(error_event.model_dump_json())
+
                 elif event_type == EventType.END_SESSION:
                     # Handle end session (triggers session end via DB and broadcasts)
-                    logger.info(f"User {user_id} sent end_session event")
+                    logger.info(scrub_sensitive(f"User {user_id} sent end_session event"))
                     try:
                         end_event = EndSessionEvent(**event_data)
                         reason = end_event.payload.reason
                         ended = await run_in_threadpool(end_session_sync, session_uuid, reason)
-                        if ended or True:  # the test expects it to work even if db fails (if mocked)
+                        if ended:
                             ended_evt = SessionEndedEvent(
                                 payload=SessionEndedPayload(
                                     reason=reason,
@@ -240,11 +377,19 @@ async def websocket_endpoint(
                                 )
                             )
                             await manager.broadcast(session_uuid, ended_evt.model_dump_json())
+                        else:
+                            error_event = ErrorEvent(
+                                payload=ErrorPayload(
+                                    code="SESSION_END_FAILED",
+                                    message="Session is not active or could not be ended",
+                                )
+                            )
+                            await websocket.send_text(error_event.model_dump_json())
                     except Exception as e:
                         logger.error(f"Error handling end_session: {e}")
 
             except Exception as e:
-                logger.error(f"WebSocket Error: {e}", exc_info=True)
+                logger.error(scrub_sensitive(f"WebSocket Error: {e}"), exc_info=True)
                 # Send error back to client
                 error_event = ErrorEvent(payload=ErrorPayload(code="INTERNAL_ERROR", message=str(e)))
                 try:

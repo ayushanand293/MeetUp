@@ -53,9 +53,6 @@ def get_current_user_override(db_session=None):
     return u
 
 
-app.dependency_overrides[deps.get_current_user] = get_current_user_override
-
-
 @pytest.fixture(name="client")
 def client_fixture():
     # Ensure users exist for the test logic
@@ -71,8 +68,11 @@ def client_fixture():
     db.commit()
     db.close()
 
+    app.dependency_overrides[deps.get_current_user] = get_current_user_override
     client = TestClient(app)
-    return client
+    yield client
+    if deps.get_current_user in app.dependency_overrides:
+        del app.dependency_overrides[deps.get_current_user]
 
 
 def test_week1_demo_flow(client, db):

@@ -1,28 +1,61 @@
 import json
 import secrets
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, HTTPException, status
-from sqlalchemy import func
+from pydantic import BaseModel
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.api import deps
 from app.core.database import get_db
+from app.core.destinations import copy_destination, destination_from_model
 from app.core.idempotency import check_and_cache_idempotency, get_cached_response, get_idempotency_key
-from app.core.metrics import track_manual_end
+from app.core.metrics import get_metrics, track_manual_end
+from app.core.rate_limit import enforce_rate_limit
 from app.core.redis import get_redis
+from app.core.validation import validate_location_update
 from app.models.meet_request import MeetRequest, RequestStatus
+from app.models.invite import Invite
 from app.models.session import ParticipantStatus, SessionParticipant, SessionStatus
 from app.models.session import Session as MeetSession
 from app.models.user import User
+from app.realtime.connection_manager import manager
+from app.realtime.schemas import PeerLocationEvent, PeerLocationPayload
 
 router = APIRouter()
 
 INVITE_TOKEN_TTL_SECONDS = 15 * 60
 INVITE_CREATE_LIMIT_PER_MINUTE = 5
 INVITE_REDEEM_LIMIT_PER_MINUTE = 20
+BACKGROUND_LOCATION_LIMIT_PER_MINUTE = 4
+LAST_LOCATION_TTL_SECONDS = 600
+
+
+class BackgroundLocationBody(BaseModel):
+    lat: float
+    lon: float
+    accuracy_m: float = 0.0
+    timestamp: datetime | None = None
+    client_ts_ms: int | None = None
+
+
+def _display_name(user: User | None) -> str:
+    if not user:
+        return "Friend"
+
+    profile = user.profile_data or {}
+    preferred = profile.get("display_name") or profile.get("name")
+    if preferred:
+        return str(preferred)
+
+    email_prefix = (user.email or "").split("@", 1)[0].strip()
+    if email_prefix:
+        return email_prefix.replace(".", " ").replace("_", " ").title()
+
+    return "Friend"
 
 
 def _is_participant(db: Session, session_id: UUID, user_id: UUID) -> bool:
@@ -32,6 +65,14 @@ def _is_participant(db: Session, session_id: UUID, user_id: UUID) -> bool:
         .first()
         is not None
     )
+
+
+async def _store_last_known_location(redis_client, session_id: UUID, user_id: UUID, payload: dict) -> None:
+    loc_payload = dict(payload)
+    timestamp = loc_payload.get("timestamp")
+    if isinstance(timestamp, datetime):
+        loc_payload["timestamp"] = timestamp.isoformat()
+    await redis_client.setex(f"loc:{session_id}:{user_id}", LAST_LOCATION_TTL_SECONDS, json.dumps(loc_payload))
 
 
 async def _enforce_invite_rate_limit(redis_client, key: str, limit: int) -> None:
@@ -96,6 +137,7 @@ async def create_session_from_request(
             return response
 
     session = MeetSession(status=SessionStatus.ACTIVE)
+    copy_destination(req, session)
     db.add(session)
     db.flush()  # get ID
 
@@ -108,6 +150,8 @@ async def create_session_from_request(
     db.refresh(session)
 
     response = {"session_id": str(session.id), "status": session.status}
+    if destination_from_model(session):
+        get_metrics().increment_counter("destination_sessions_started_total")
     
     # Cache response if idempotency key provided
     if idempotency_key:
@@ -126,15 +170,37 @@ def get_active_session(db: Session = Depends(get_db), current_user: User = Depen
         .filter(
             SessionParticipant.user_id == current_user.id,
             MeetSession.status == SessionStatus.ACTIVE,
-            SessionParticipant.status == ParticipantStatus.JOINED,
+            or_(
+                SessionParticipant.status == ParticipantStatus.JOINED,
+                SessionParticipant.status.is_(None),
+            ),
         )
+        .order_by(SessionParticipant.joined_at.desc(), MeetSession.created_at.desc())
         .first()
     )
 
     if not participant:
         return None
 
-    return {"session_id": participant.session_id, "joined_at": participant.joined_at}
+    peer_user = (
+        db.query(User)
+        .join(SessionParticipant, SessionParticipant.user_id == User.id)
+        .filter(
+            SessionParticipant.session_id == participant.session_id,
+            SessionParticipant.user_id != current_user.id,
+        )
+        .first()
+    )
+
+    response = {"session_id": participant.session_id, "joined_at": participant.joined_at}
+    destination = destination_from_model(participant.session)
+    if destination:
+        response["destination"] = destination
+    if peer_user:
+        response["peer_id"] = str(peer_user.id)
+        response["peer_name"] = _display_name(peer_user)
+
+    return response
 
 
 @router.post("/{session_id}/end")
@@ -193,12 +259,106 @@ async def end_session(
     return response
 
 
+@router.post("/{session_id}/force_end")
+async def force_end_session(
+    session_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user),
+):
+    session = db.query(MeetSession).filter(MeetSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if not _is_participant(db, session_id, current_user.id):
+        raise HTTPException(status_code=403, detail="Not a participant")
+
+    if session.status != SessionStatus.ACTIVE:
+        return {"status": "ENDED", "session_id": str(session_id)}
+
+    session.status = SessionStatus.ENDED
+    session.end_reason = "FORCE_ENDED"
+    session.ended_at = func.now()
+    db.commit()
+    track_manual_end()
+
+    return {"status": "ENDED", "session_id": str(session_id)}
+
+
+@router.post("/{session_id}/location")
+async def post_background_location(
+    session_id: UUID,
+    body: BackgroundLocationBody,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user),
+):
+    session = db.query(MeetSession).filter(MeetSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if session.status != SessionStatus.ACTIVE:
+        raise HTTPException(status_code=409, detail="Session is not active")
+    if not _is_participant(db, session_id, current_user.id):
+        raise HTTPException(status_code=403, detail="Not a participant")
+
+    await enforce_rate_limit(
+        "bg_location_http",
+        f"{session_id}:{current_user.id}",
+        BACKGROUND_LOCATION_LIMIT_PER_MINUTE,
+        60,
+    )
+
+    redis_client = await get_redis()
+    payload_timestamp = body.timestamp or datetime.utcnow()
+    if payload_timestamp.tzinfo is not None:
+        payload_timestamp = payload_timestamp.replace(tzinfo=None)
+    previous_location = None
+    previous_raw = await redis_client.get(f"loc:{session_id}:{current_user.id}")
+    if previous_raw:
+        try:
+            previous = json.loads(previous_raw)
+            previous_timestamp = datetime.fromisoformat(previous["timestamp"].replace("Z", "+00:00"))
+            if previous_timestamp.tzinfo is not None:
+                previous_timestamp = previous_timestamp.replace(tzinfo=None)
+            previous_location = {
+                "lat": previous.get("lat"),
+                "lon": previous.get("lon"),
+                "timestamp": previous_timestamp,
+            }
+        except Exception:
+            previous_location = None
+
+    is_valid, error_msg = validate_location_update(
+        lat=body.lat,
+        lon=body.lon,
+        accuracy_m=body.accuracy_m,
+        timestamp=payload_timestamp,
+        prev_location=previous_location,
+    )
+    if not is_valid:
+        raise HTTPException(status_code=400, detail=error_msg)
+
+    location_payload = {
+        "lat": body.lat,
+        "lon": body.lon,
+        "accuracy_m": body.accuracy_m,
+        "timestamp": payload_timestamp,
+        "client_ts_ms": body.client_ts_ms,
+    }
+    peer_event = PeerLocationEvent(
+        payload=PeerLocationPayload(user_id=current_user.id, **location_payload)
+    )
+    await manager.broadcast(session_id, peer_event.model_dump_json(), exclude_user=current_user.id)
+    await _store_last_known_location(redis_client, session_id, current_user.id, location_payload)
+    get_metrics().increment_counter("bg_location_http_updates_total")
+
+    return {"ok": True}
+
+
 @router.post("/{session_id}/invite")
 async def create_invite_token(
     session_id: UUID,
     db: Session = Depends(get_db),
     current_user: User = Depends(deps.get_current_user),
 ):
+    """Deprecated compatibility endpoint. Prefer POST /api/v1/invites."""
     session = db.query(MeetSession).filter(MeetSession.id == session_id).first()
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -207,25 +367,22 @@ async def create_invite_token(
     if not _is_participant(db, session_id, current_user.id):
         raise HTTPException(status_code=403, detail="Not a participant")
 
-    redis_client = await get_redis()
-    await _enforce_invite_rate_limit(
-        redis_client,
-        key=f"invite_create_rate:{current_user.id}",
-        limit=INVITE_CREATE_LIMIT_PER_MINUTE,
-    )
-
     token = secrets.token_urlsafe(24)
-    payload = {
-        "session_id": str(session_id),
-        "created_by": str(current_user.id),
-        "created_at": datetime.utcnow().isoformat(),
-    }
-    await redis_client.setex(f"invite:{token}", INVITE_TOKEN_TTL_SECONDS, json.dumps(payload))
+    expires_at = datetime.utcnow() + timedelta(hours=24)
+    invite = Invite(
+        created_by=current_user.id,
+        recipient=f"session:{session_id}",
+        request_id=None,
+        token=token,
+        expires_at=expires_at,
+    )
+    db.add(invite)
+    db.commit()
 
     return {
         "invite_token": token,
         "session_id": str(session_id),
-        "expires_in_seconds": INVITE_TOKEN_TTL_SECONDS,
+        "expires_in_seconds": 24 * 60 * 60,
     }
 
 
@@ -236,32 +393,30 @@ async def redeem_invite_token(
     db: Session = Depends(get_db),
     current_user: User = Depends(deps.get_current_user),
 ):
+    """Deprecated compatibility endpoint. Prefer POST /api/v1/invites/{token}/redeem."""
     session = db.query(MeetSession).filter(MeetSession.id == session_id).first()
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     if session.status != SessionStatus.ACTIVE:
         raise HTTPException(status_code=400, detail="Session is not active")
 
-    redis_client = await get_redis()
-    await _enforce_invite_rate_limit(
-        redis_client,
-        key=f"invite_redeem_rate:{current_user.id}",
-        limit=INVITE_REDEEM_LIMIT_PER_MINUTE,
-    )
-
-    invite_raw = await redis_client.get(f"invite:{token}")
-    if not invite_raw:
+    invite = db.query(Invite).filter(Invite.token == token).first()
+    if not invite:
         raise HTTPException(status_code=410, detail="Invite token expired or invalid")
 
-    try:
-        invite_data = json.loads(invite_raw)
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=400, detail="Invite token payload is malformed")
+    now = datetime.now(invite.expires_at.tzinfo) if invite.expires_at and invite.expires_at.tzinfo else datetime.utcnow()
+    if invite.expires_at and invite.expires_at < now:
+        raise HTTPException(status_code=410, detail="Invite token expired or invalid")
 
-    if invite_data.get("session_id") != str(session_id):
+    if invite.recipient != f"session:{session_id}":
         raise HTTPException(status_code=400, detail="Invite token does not match this session")
 
+    if not invite.redeemed_at:
+        invite.redeemed_at = datetime.utcnow()
+        db.add(invite)
+
     if _is_participant(db, session_id, current_user.id):
+        db.commit()
         return {"status": "already_joined", "session_id": str(session_id)}
 
     participant = SessionParticipant(session_id=session_id, user_id=current_user.id, status=ParticipantStatus.JOINED)
@@ -275,16 +430,18 @@ async def redeem_invite_token(
 async def get_session_snapshot(
     session_id: UUID,
     db: Session = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user),
 ):
     """
     Get current snapshot of all locations in a session (from Redis).
     Locations stored with 120s TTL, so expired entries won't be returned.
-    No authentication required (fallback for web clients).
     """
     # Verify session exists
     session = db.query(MeetSession).filter(MeetSession.id == session_id).first()
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
+    if not _is_participant(db, session_id, current_user.id):
+        raise HTTPException(status_code=403, detail="Not authorized")
 
     redis_client = await get_redis()
 
@@ -310,6 +467,7 @@ async def get_session_snapshot(
         "session_id": str(session_id),
         "session_status": session.status,
         "locations": locations,
+        "destination": destination_from_model(session),
         "timestamp": datetime.utcnow().isoformat(),
     }
 
@@ -356,7 +514,7 @@ def get_session_history(
 
         if co_participant:
             # Extract name from profile_data or use email prefix
-            name = co_participant.profile_data.get("name") if co_participant.profile_data else None
+            name = co_participant.profile_data.get("display_name") if co_participant.profile_data else None
             if not name:
                 name = co_participant.email.split("@")[0].replace("_", " ").title()
             
@@ -365,6 +523,7 @@ def get_session_history(
                 "co_participant_id": str(co_participant.id),
                 "co_participant_name": name,
                 "co_participant_email": co_participant.email,
+                "destination": destination_from_model(session),
                 "ended_at": session.ended_at.isoformat() if session.ended_at else None,
                 "created_at": session.created_at.isoformat(),
                 "duration_seconds": int((session.ended_at - session.created_at).total_seconds()) if session.ended_at else 0,
@@ -427,3 +586,39 @@ async def im_here_confirmation(
             return {"status": "ended", "reason": "MANUAL_CONFIRM"}
 
     return {"status": "waiting_for_peer", "message": "Waiting for peer to confirm"}
+
+
+@router.get("/{session_id}/participants")
+def get_session_participants(
+    session_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user),
+):
+    """
+    Get all participants in a session with their user info (display_name, etc).
+    Only accessible to participants of the session.
+    """
+    session = db.query(MeetSession).filter(MeetSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    if not _is_participant(db, session_id, current_user.id):
+        raise HTTPException(status_code=403, detail="Not a participant of this session")
+    
+    participants = (
+        db.query(SessionParticipant, User)
+        .join(User, SessionParticipant.user_id == User.id)
+        .filter(SessionParticipant.session_id == session_id)
+        .all()
+    )
+    
+    result = []
+    for participant, user in participants:
+        result.append({
+            "user_id": str(user.id),
+            "display_name": _display_name(user),
+            "status": participant.status,
+            "joined_at": participant.joined_at,
+        })
+    
+    return result

@@ -9,36 +9,19 @@ import { useFocusEffect } from '@react-navigation/native';
 import client from '../api/client';
 import { useTheme, Spacing, Radius, Font, anim } from '../theme';
 
-const MOCK_HISTORY = [
-    {
-        session_id: 'mock-session-1',
-        co_participant_id: 'mock-user-sarah',
-        co_participant_name: 'Sarah',
-        co_participant_email: 'sarah@test.com',
-        ended_at: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
-    },
-    {
-        session_id: 'mock-session-2',
-        co_participant_id: 'mock-user-marcus',
-        co_participant_name: 'Marcus',
-        co_participant_email: 'marcus@test.com',
-        ended_at: new Date(Date.now() - 26 * 60 * 60 * 1000).toISOString(),
-    },
-    {
-        session_id: 'mock-session-3',
-        co_participant_id: 'mock-user-jordan',
-        co_participant_name: 'Jordan',
-        co_participant_email: 'jordan@test.com',
-        ended_at: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
-    },
-];
-
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const TIMELINE_ITEM_WIDTH = Math.max(132, Math.floor((SCREEN_WIDTH - 92) / 2));
 
-const HomeScreen = ({ navigation }) => {
+const formatStoryTitle = (item) => {
+    const friendName = item?.co_participant_name || 'Friend';
+    const placeName = item?.destination?.name;
+    if (placeName) return `Met ${friendName} at ${placeName}`;
+    return `Met ${friendName}`;
+};
+
+const HomeScreen = ({ navigation, route }) => {
     const { colors } = useTheme();
-    const { user } = useAuth();
+    const { user, activeSessionHint, clearActiveSessionHint } = useAuth();
     const [activeSession, setActiveSession] = useState(null);
     const [incomingRequests, setIncomingRequests] = useState([]);
     const [outgoingRequests, setOutgoingRequests] = useState([]);
@@ -48,7 +31,13 @@ const HomeScreen = ({ navigation }) => {
     const [history, setHistory] = useState([]);
     const pollRef = useRef(null);
     const activeSessionIdRef = useRef(null);
-    const lastAutoRoutedSessionRef = useRef(null);
+    const lastKnownActiveSessionRef = useRef(null);
+    const missingActiveSessionPollsRef = useRef(0);
+    const outgoingPendingCountRef = useRef(0);
+    const outgoingPendingRequestIdsRef = useRef([]);
+    const outgoingPendingPeerHintRef = useRef(null);
+    const acceptanceAutoJoinSessionRef = useRef(null);
+    const awaitingSenderJoinRef = useRef(false);
     const [now, setNow] = useState(Date.now());
 
     // Entrance
@@ -98,11 +87,27 @@ const HomeScreen = ({ navigation }) => {
         return () => clearInterval(t);
     }, []);
 
+    useEffect(() => {
+        const watchId = route?.params?.watchOutgoingRequestId;
+        const shouldWatch = route?.params?.watchOutgoingAcceptance;
+        if (!watchId || !shouldWatch) return;
+
+        // Deterministically arm sender join recovery after leaving RequestScreen.
+        awaitingSenderJoinRef.current = true;
+        outgoingPendingRequestIdsRef.current = [String(watchId)];
+
+        // Clear one-shot route params to avoid re-arming indefinitely.
+        navigation.setParams({
+            watchOutgoingRequestId: undefined,
+            watchOutgoingAcceptance: undefined,
+        });
+    }, [route?.params?.watchOutgoingRequestId, route?.params?.watchOutgoingAcceptance, navigation]);
+
     const fetchData = useCallback(async (silent = false) => {
         if (!silent) setIsRefreshing(true);
         try {
-            const [sRes, oRes, iRes] = await Promise.allSettled([
-                client.get('/sessions/active'), client.get('/requests/outgoing'), client.get('/requests/pending'),
+            const [sRes, oRes, iRes, hRes] = await Promise.allSettled([
+                client.get('/sessions/active'), client.get('/requests/outgoing'), client.get('/requests/pending'), client.get('/sessions/history'),
             ]);
 
             if (sRes.status === 'rejected' && oRes.status === 'rejected' && iRes.status === 'rejected') {
@@ -115,30 +120,116 @@ const HomeScreen = ({ navigation }) => {
             const nextSessionId = session?.session_id || null;
             const prevSessionId = activeSessionIdRef.current;
 
-            // Avoid state churn when session identity is unchanged.
-            if (nextSessionId !== prevSessionId) {
+            // Keep active session card stable across brief API null responses.
+            if (session) {
+                missingActiveSessionPollsRef.current = 0;
+                lastKnownActiveSessionRef.current = session;
                 setActiveSession(session);
                 activeSessionIdRef.current = nextSessionId;
+            } else {
+                missingActiveSessionPollsRef.current += 1;
+                if (missingActiveSessionPollsRef.current >= 3) {
+                    lastKnownActiveSessionRef.current = null;
+                    setActiveSession(null);
+                    activeSessionIdRef.current = null;
+                    clearActiveSessionHint();
+                } else if (lastKnownActiveSessionRef.current) {
+                    setActiveSession(lastKnownActiveSessionRef.current);
+                }
             }
 
-            setOutgoingRequests(oRes.status === 'fulfilled' ? oRes.value.data : []);
-            setIncomingRequests(iRes.status === 'fulfilled' ? iRes.value.data : []);
+            const nextOutgoing = oRes.status === 'fulfilled' ? oRes.value.data : [];
+            const nextOutgoingPending = nextOutgoing.filter((r) => String(r?.status || 'PENDING') === 'PENDING');
+            const nextOutgoingPendingIds = nextOutgoingPending.map((r) => String(r.id));
+            const nextOutgoingPendingCount = nextOutgoing.filter((r) => String(r?.status || 'PENDING') === 'PENDING').length;
 
-            // Auto-open active session as soon as it appears (sender/receiver instant jump behavior)
+            if (nextOutgoingPending.length > 0) {
+                const firstPending = nextOutgoingPending[0];
+                outgoingPendingPeerHintRef.current = {
+                    id: firstPending.receiver_id,
+                    display_name: firstPending.receiver_name || 'Friend',
+                    name: firstPending.receiver_name || 'Friend',
+                };
+            }
+
+            // Sender flow signal: pending outgoing disappeared (likely accepted).
+            if (outgoingPendingCountRef.current > 0 && nextOutgoingPendingCount === 0) {
+                awaitingSenderJoinRef.current = true;
+            }
+
+            // Auto-join sender once active session becomes visible, even if it appears a tick later.
             if (
+                awaitingSenderJoinRef.current &&
                 nextSessionId &&
-                nextSessionId !== lastAutoRoutedSessionRef.current
+                acceptanceAutoJoinSessionRef.current !== nextSessionId
             ) {
-                lastAutoRoutedSessionRef.current = nextSessionId;
+                awaitingSenderJoinRef.current = false;
+                acceptanceAutoJoinSessionRef.current = nextSessionId;
                 clearInterval(pollRef.current);
-                navigation.navigate('ActiveSession', { sessionId: nextSessionId });
+                navigation.navigate('ActiveSession', {
+                    sessionId: nextSessionId,
+                    friend: session?.peer_id
+                        ? {
+                            id: session.peer_id,
+                            display_name: session.peer_name || 'Friend',
+                            name: session.peer_name || 'Friend',
+                        }
+                        : outgoingPendingPeerHintRef.current || undefined,
+                });
                 return;
             }
 
-            if (nextSessionId && !prevSessionId) {
+            // Fallback: if pending vanished but /sessions/active is still empty, recover via accepted request id.
+            if (awaitingSenderJoinRef.current && !nextSessionId) {
+                const fallbackRequestId = outgoingPendingRequestIdsRef.current[0];
+                if (fallbackRequestId) {
+                    try {
+                        const recoverRes = await client.post(`/sessions/from-request/${fallbackRequestId}`);
+                        const recoveredSessionId = recoverRes?.data?.session_id;
+                        if (recoveredSessionId && acceptanceAutoJoinSessionRef.current !== recoveredSessionId) {
+                            awaitingSenderJoinRef.current = false;
+                            acceptanceAutoJoinSessionRef.current = recoveredSessionId;
+                            lastKnownActiveSessionRef.current = {
+                                session_id: recoveredSessionId,
+                                peer_name: outgoingPendingPeerHintRef.current?.display_name || 'Friend',
+                                peer_id: outgoingPendingPeerHintRef.current?.id || null,
+                            };
+                            activeSessionIdRef.current = recoveredSessionId;
+                            clearInterval(pollRef.current);
+                            navigation.navigate('ActiveSession', {
+                                sessionId: recoveredSessionId,
+                                friend: outgoingPendingPeerHintRef.current || undefined,
+                            });
+                            return;
+                        }
+                    } catch (err) {
+                        const status = err?.response?.status;
+                        if (status === 400 || status === 403 || status === 404 || status === 410) {
+                            // Not recoverable from this request id; stop retrying.
+                            awaitingSenderJoinRef.current = false;
+                        }
+                    }
+                }
+            }
+
+            outgoingPendingCountRef.current = nextOutgoingPendingCount;
+            outgoingPendingRequestIdsRef.current = nextOutgoingPendingIds;
+
+            setOutgoingRequests(nextOutgoing);
+            setIncomingRequests(iRes.status === 'fulfilled' ? iRes.value.data : []);
+            setHistory(hRes.status === 'fulfilled' ? hRes.value.data?.history || [] : []);
+
+            // Show/refresh banner animation when there's an active session (new or returning)
+            if (nextSessionId) {
                 Animated.parallel([
                     Animated.spring(bannerSlide, { toValue: 0, useNativeDriver: true, tension: 80 }),
                     Animated.timing(bannerOp, { toValue: 1, duration: 300, useNativeDriver: true }),
+                ]).start();
+            } else {
+                // Hide banner if session ended
+                Animated.parallel([
+                    Animated.spring(bannerSlide, { toValue: -80, useNativeDriver: true, tension: 80 }),
+                    Animated.timing(bannerOp, { toValue: 0, duration: 300, useNativeDriver: true }),
                 ]).start();
             }
         } catch (_) {
@@ -147,7 +238,7 @@ const HomeScreen = ({ navigation }) => {
             setIsRefreshing(false);
             setHasLoadedOnce(true);
         }
-    }, [bannerOp, bannerSlide]);
+    }, [bannerOp, bannerSlide, clearActiveSessionHint, navigation]);
 
     useFocusEffect(useCallback(() => {
         fetchData();
@@ -165,28 +256,18 @@ const HomeScreen = ({ navigation }) => {
     const pending = outgoingRequests.filter(r => r.status === 'PENDING');
     const incomingPending = incomingRequests;
     const expiredCount = pending.filter(r => countdown(r.expires_at) === '00:00').length;
-    const displayName = user?.email?.split('@')[0] || 'You';
+    const displayActiveSession = activeSession || lastKnownActiveSessionRef.current || activeSessionHint || (activeSessionIdRef.current
+        ? { session_id: activeSessionIdRef.current, peer_name: 'Friend' }
+        : null);
+    const displayName = user?.display_name || user?.phone_e164 || 'You';
     const ambientUp = ambientFloat.interpolate({ inputRange: [0, 1], outputRange: [0, -14] });
     const ambientDown = ambientFloat.interpolate({ inputRange: [0, 1], outputRange: [0, 12] });
-
-    // Fetch session history
-    useEffect(() => {
-        const fetchHistory = async () => {
-            try {
-                const res = await client.get('/sessions/history');
-                const historyItems = res.data?.history || [];
-                setHistory(historyItems.length ? historyItems : MOCK_HISTORY);
-            } catch (err) {
-                console.log('Could not fetch history', err);
-                setHistory(MOCK_HISTORY);
-            }
-        };
-        fetchHistory();
-    }, []);
+    const liveGreen = '#34C759';
 
     const timelineStories = useMemo(() => {
         return history.filter((item) => !!item.co_participant_name).slice(0, 16);
     }, [history]);
+    const latestStory = timelineStories[0] || null;
 
     const timelineDisplay = useMemo(() => {
         return [
@@ -314,42 +395,85 @@ const HomeScreen = ({ navigation }) => {
             )}
 
             {/* Active session banner */}
-            {activeSession && (
-                <Animated.View style={{ transform: [{ translateY: bannerSlide }], opacity: bannerOp, marginBottom: Spacing.lg }}>
+            {displayActiveSession && (
+                <View style={{ marginBottom: Spacing.lg }}>
                     <TouchableOpacity
                         style={{
                             backgroundColor: colors.surface,
-                            borderRadius: Radius.lg,
-                            padding: Spacing.lg,
+                            borderRadius: 24,
+                            padding: 14,
                             borderWidth: 1,
-                            borderColor: colors.border,
-                            shadowColor: colors.textPrimary,
+                            borderColor: 'rgba(52,199,89,0.34)',
+                            shadowColor: liveGreen,
                             shadowOpacity: 0.1,
                             shadowOffset: { width: 0, height: 10 },
                             shadowRadius: 18,
                             elevation: 5,
                         }}
-                        onPress={() => { clearInterval(pollRef.current); navigation.navigate('ActiveSession', { sessionId: activeSession.session_id }); }}>
-                        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-                            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                                <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: colors.textPrimary, marginRight: 8 }} />
-                                <Text style={[Font.label, { color: colors.textPrimary }]}>LIVE</Text>
+                        onPress={() => {
+                            clearInterval(pollRef.current);
+                            navigation.navigate('ActiveSession', {
+                                sessionId: displayActiveSession.session_id,
+                                friend: displayActiveSession?.peer_id
+                                    ? {
+                                        id: displayActiveSession.peer_id,
+                                        display_name: displayActiveSession.peer_name || 'Friend',
+                                        name: displayActiveSession.peer_name || 'Friend',
+                                    }
+                                    : undefined,
+                            });
+                        }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                            <View style={{
+                                width: 44,
+                                height: 44,
+                                borderRadius: 16,
+                                backgroundColor: 'rgba(52,199,89,0.12)',
+                                borderWidth: 1,
+                                borderColor: 'rgba(52,199,89,0.28)',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                marginRight: 12,
+                            }}>
+                                <View style={{
+                                    width: 12,
+                                    height: 12,
+                                    borderRadius: 6,
+                                    backgroundColor: liveGreen,
+                                    shadowColor: liveGreen,
+                                    shadowOpacity: 0.75,
+                                    shadowRadius: 8,
+                                    shadowOffset: { width: 0, height: 0 },
+                                }} />
+                            </View>
+                            <View style={{ flex: 1 }}>
+                                <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 3 }}>
+                                    <Text style={{ color: liveGreen, fontSize: 10, fontWeight: '900', letterSpacing: 0.8, marginRight: 7 }}>LIVE</Text>
+                                    <View style={{ width: 1, height: 10, backgroundColor: colors.border, marginRight: 7 }} />
+                                    <Text style={{ color: colors.textMuted, fontSize: 10, fontWeight: '800' }}>Location sharing</Text>
+                                </View>
+                                <Text numberOfLines={1} style={{ color: colors.textPrimary, fontSize: 17, fontWeight: '900', letterSpacing: -0.25 }}>
+                                    {displayActiveSession.peer_name || 'Friend'} is on the map
+                                </Text>
+                                <Text style={{ color: colors.textSecondary, fontSize: 12, fontWeight: '700', marginTop: 2 }}>
+                                    Tap to rejoin
+                                </Text>
                             </View>
                             <View style={{
+                                width: 32,
+                                height: 32,
+                                borderRadius: 12,
+                                backgroundColor: colors.surfaceElevated,
                                 borderWidth: 1,
                                 borderColor: colors.border,
-                                backgroundColor: colors.surfaceElevated,
-                                borderRadius: Radius.pill,
-                                paddingHorizontal: 9,
-                                paddingVertical: 4,
+                                alignItems: 'center',
+                                justifyContent: 'center',
                             }}>
-                                <Text style={{ color: colors.textSecondary, fontSize: 10, fontWeight: '700', letterSpacing: 0.4 }}>ACTIVE</Text>
+                                <Text style={{ color: colors.textPrimary, fontSize: 17, fontWeight: '900' }}>›</Text>
                             </View>
                         </View>
-                        <Text style={[Font.subtitle, { color: colors.textPrimary, marginBottom: 2 }]}>Active Session</Text>
-                        <Text style={[Font.body, { color: colors.textSecondary, fontSize: 13 }]}>Tap to rejoin the map</Text>
                     </TouchableOpacity>
-                </Animated.View>
+                </View>
             )}
 
             {/* Pending requests */}
@@ -398,22 +522,62 @@ const HomeScreen = ({ navigation }) => {
                         style={{
                             backgroundColor: colors.surface,
                             borderWidth: 1,
-                            borderColor: colors.textPrimary,
-                            borderRadius: Radius.md,
-                            padding: Spacing.md,
+                            borderColor: colors.border,
+                            borderRadius: 22,
+                            padding: 14,
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            shadowColor: colors.textPrimary,
+                            shadowOpacity: 0.06,
+                            shadowOffset: { width: 0, height: 10 },
+                            shadowRadius: 18,
+                            elevation: 4,
                         }}
                         onPress={() => navigation.navigate('RequestsTabs', { activeTab: 'incoming' })}>
-                        <Text style={{ color: colors.textPrimary, fontWeight: '800', marginBottom: 4 }}>
-                            You have {incomingPending.length} incoming request{incomingPending.length > 1 ? 's' : ''}
-                        </Text>
-                        <Text style={{ color: colors.textSecondary, fontSize: 13 }}>
-                            Tap to accept or decline now.
-                        </Text>
+                        <View style={{
+                            width: 44,
+                            height: 44,
+                            borderRadius: 16,
+                            backgroundColor: colors.textPrimary,
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            marginRight: 12,
+                        }}>
+                            <Text style={{ color: colors.bg, fontSize: 18, fontWeight: '900' }}>
+                                {(incomingPending[0]?.sender_name || incomingPending[0]?.requester_name || 'R')[0].toUpperCase()}
+                            </Text>
+                        </View>
+                        <View style={{ flex: 1 }}>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 3 }}>
+                                <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: '#B1121B', marginRight: 6 }} />
+                                <Text style={{ color: colors.textMuted, fontSize: 10, fontWeight: '900', letterSpacing: 0.7 }}>
+                                    REQUEST
+                                </Text>
+                            </View>
+                            <Text numberOfLines={1} style={{ color: colors.textPrimary, fontSize: 16, fontWeight: '900', letterSpacing: -0.2 }}>
+                                {incomingPending.length === 1 ? `${incomingPending[0]?.sender_name || incomingPending[0]?.requester_name || 'Someone'} wants to meet` : `${incomingPending.length} incoming requests`}
+                            </Text>
+                            <Text style={{ color: colors.textSecondary, fontSize: 12, fontWeight: '700', marginTop: 2 }}>
+                                Review and respond
+                            </Text>
+                        </View>
+                        <View style={{
+                            width: 32,
+                            height: 32,
+                            borderRadius: 12,
+                            backgroundColor: colors.surfaceElevated,
+                            borderWidth: 1,
+                            borderColor: colors.border,
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                        }}>
+                            <Text style={{ color: colors.textPrimary, fontSize: 17, fontWeight: '900' }}>›</Text>
+                        </View>
                     </TouchableOpacity>
                 </Animated.View>
             )}
 
-            {hasLoadedOnce && !activeSession && pending.length === 0 && incomingPending.length === 0 && (
+            {hasLoadedOnce && !displayActiveSession && pending.length === 0 && incomingPending.length === 0 && (
                 <Animated.View style={{ opacity: cardsOp, transform: [{ translateY: cardsY }], marginBottom: Spacing.lg }}>
                     <View style={{
                         backgroundColor: colors.surface,
@@ -434,11 +598,11 @@ const HomeScreen = ({ navigation }) => {
                     <View style={{ width: 5, height: 5, borderRadius: 3, backgroundColor: colors.textMuted, marginRight: 6 }} />
                     <Text style={[Font.label, { color: colors.textMuted }]}>ACTIONS</Text>
                 </View>
-                <ActionCard icon="↺" title="Quick Friends" sub="Meet previous friends in one tap" colors={colors}
+                <ActionCard icon="↺" title="Quick Friends" sub="Meet previous friends in one tap" accent="warm" colors={colors}
                     onPress={() => navigation.navigate('QuickFriends')} />
-                <ActionCard icon="+" title="Find a Friend" sub="Search by name, send a meet request" colors={colors}
+                <ActionCard icon="+" title="Find a Friend" sub="Search by name, send a meet request" accent="primary" colors={colors}
                     onPress={() => navigation.navigate('FriendList')} />
-                <ActionCard icon="○" title="Your Requests" sub="Show incoming and waiting requests" colors={colors}
+                <ActionCard icon="○" title="Your Requests" sub="Show incoming and waiting requests" accent="quiet" colors={colors}
                     onPress={() => navigation.navigate('RequestsTabs')} />
             </Animated.View>
 
@@ -458,10 +622,45 @@ const HomeScreen = ({ navigation }) => {
                         borderWidth: 1,
                         borderColor: colors.border,
                         borderRadius: Radius.md,
-                        paddingTop: 18,
+                        paddingTop: latestStory ? 14 : 18,
                         paddingBottom: 2,
                         overflow: 'hidden',
                     }}>
+                        {!!latestStory && (
+                            <View style={{
+                                marginHorizontal: Spacing.md,
+                                marginBottom: 14,
+                                padding: 12,
+                                borderRadius: 18,
+                                backgroundColor: colors.surfaceElevated,
+                                borderWidth: 1,
+                                borderColor: colors.border,
+                                flexDirection: 'row',
+                                alignItems: 'center',
+                            }}>
+                                <View style={{
+                                    width: 38,
+                                    height: 38,
+                                    borderRadius: 19,
+                                    backgroundColor: colors.textPrimary,
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    marginRight: 10,
+                                }}>
+                                    <Text style={{ color: colors.bg, fontSize: 15, fontWeight: '900' }}>
+                                        {(latestStory.co_participant_name || '?')[0].toUpperCase()}
+                                    </Text>
+                                </View>
+                                <View style={{ flex: 1 }}>
+                                    <Text numberOfLines={1} style={{ color: colors.textPrimary, fontSize: 15, fontWeight: '900', letterSpacing: -0.2 }}>
+                                        {formatStoryTitle(latestStory)}
+                                    </Text>
+                                    <Text style={{ color: colors.textMuted, fontSize: 11, fontWeight: '700', marginTop: 3 }}>
+                                        {getTimelineMeta(latestStory.ended_at).ago}
+                                    </Text>
+                                </View>
+                            </View>
+                        )}
                         <ScrollView
                             horizontal
                             showsHorizontalScrollIndicator={false}
@@ -569,7 +768,7 @@ const HomeScreen = ({ navigation }) => {
                         <Text
                             numberOfLines={1}
                             style={[Font.subtitle, { color: colors.textPrimary, fontSize: 12, marginBottom: 1, fontWeight: isLead ? '800' : '700' }]}>
-                            Met {item.co_participant_name}
+                            {formatStoryTitle(item)}
                         </Text>
                         <Text style={[Font.caption, { color: isLead ? colors.textPrimary : colors.textSecondary, fontSize: 10 }]}>{meta.ago}</Text>
                     </>
@@ -581,8 +780,19 @@ const HomeScreen = ({ navigation }) => {
 
 
 
-const ActionCard = ({ icon, title, sub, colors, onPress }) => {
+const ActionCard = ({ icon, title, sub, colors, onPress, accent = 'quiet' }) => {
     const scale = useRef(new Animated.Value(1)).current;
+    const accentColor = accent === 'primary'
+        ? colors.textPrimary
+        : accent === 'warm'
+            ? '#B1121B'
+            : colors.textSecondary;
+    const accentBg = accent === 'primary'
+        ? colors.textPrimary
+        : accent === 'warm'
+            ? 'rgba(177,18,27,0.10)'
+            : colors.surfaceElevated;
+    const iconColor = accent === 'primary' ? colors.bg : accentColor;
     return (
         <Animated.View style={{ transform: [{ scale }] }}>
             <TouchableOpacity
@@ -590,30 +800,30 @@ const ActionCard = ({ icon, title, sub, colors, onPress }) => {
                     flexDirection: 'row',
                     alignItems: 'center',
                     backgroundColor: colors.surface,
-                    borderRadius: Radius.lg,
+                    borderRadius: 22,
                     padding: Spacing.md,
                     marginBottom: Spacing.sm,
                     borderWidth: 1,
                     borderColor: colors.border,
                     shadowColor: colors.textPrimary,
-                    shadowOpacity: 0.07,
-                    shadowOffset: { width: 0, height: 8 },
-                    shadowRadius: 12,
-                    elevation: 3,
+                    shadowOpacity: 0.06,
+                    shadowOffset: { width: 0, height: 10 },
+                    shadowRadius: 18,
+                    elevation: 4,
                 }}
                 onPress={onPress} onPressIn={() => anim.pressIn(scale)} onPressOut={() => anim.pressOut(scale)}>
                 <View style={{
                     width: 42,
                     height: 42,
-                    borderRadius: 21,
-                    backgroundColor: colors.surfaceElevated,
+                    borderRadius: 16,
+                    backgroundColor: accentBg,
                     borderWidth: 1,
-                    borderColor: colors.border,
+                    borderColor: accent === 'warm' ? 'rgba(177,18,27,0.18)' : colors.border,
                     alignItems: 'center',
                     justifyContent: 'center',
                     marginRight: 12,
                 }}>
-                    <Text style={{ fontSize: 20, color: colors.textPrimary, fontWeight: '700' }}>{icon}</Text>
+                    <Text style={{ fontSize: 20, color: iconColor, fontWeight: '900' }}>{icon}</Text>
                 </View>
                 <View style={{ flex: 1 }}>
                     <Text style={[Font.subtitle, { color: colors.textPrimary, fontSize: 16 }]}>{title}</Text>
@@ -622,11 +832,12 @@ const ActionCard = ({ icon, title, sub, colors, onPress }) => {
                 <View style={{
                     width: 30,
                     height: 30,
-                    borderRadius: 15,
+                    borderRadius: 12,
                     alignItems: 'center',
                     justifyContent: 'center',
                     borderWidth: 1,
                     borderColor: colors.border,
+                    backgroundColor: colors.surfaceElevated,
                 }}>
                     <Text style={{ color: colors.textPrimary, fontSize: 16, fontWeight: '700' }}>›</Text>
                 </View>

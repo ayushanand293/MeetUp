@@ -2,8 +2,46 @@ from datetime import datetime
 from uuid import UUID
 
 from app.core.database import SessionLocal
-from app.models.session import SessionStatus
+from app.models.session import ParticipantStatus, SessionParticipant, SessionStatus
 from app.models.session import Session as MeetSession
+
+
+def is_session_participant_sync(session_id: UUID, user_id: UUID) -> bool:
+    """Return True when user is a joined participant in an active session."""
+    db = SessionLocal()
+    try:
+        participant = (
+            db.query(SessionParticipant)
+            .join(MeetSession, SessionParticipant.session_id == MeetSession.id)
+            .filter(
+                SessionParticipant.session_id == session_id,
+                SessionParticipant.user_id == user_id,
+                SessionParticipant.status == ParticipantStatus.JOINED,
+                MeetSession.status == SessionStatus.ACTIVE,
+            )
+            .first()
+        )
+        if not participant:
+            return False
+
+        # Additional protection: If any block relationship exists between user_id and peer, deny.
+        from app.models.user_block import UserBlock
+        other_participants = db.query(SessionParticipant).filter(
+            SessionParticipant.session_id == session_id,
+            SessionParticipant.user_id != user_id
+        ).all()
+        
+        for other in other_participants:
+            block = db.query(UserBlock).filter(
+                ((UserBlock.blocker_id == user_id) & (UserBlock.blocked_id == other.user_id)) |
+                ((UserBlock.blocker_id == other.user_id) & (UserBlock.blocked_id == user_id))
+            ).first()
+            if block:
+                return False
+
+        return True
+    finally:
+        db.close()
 
 
 def end_session_sync(session_id: UUID, reason: str) -> bool:

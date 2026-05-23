@@ -1,8 +1,12 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
+
+import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { supabase } from '../api/supabase';
 import * as Linking from 'expo-linking';
+import client from '../api/client';
+import { authStorage } from '../api/authStorage';
 import analyticsService from '../services/analyticsService';
 import { authEventEmitter } from '../api/client';
+import backgroundLocation from '../services/backgroundLocation';
 
 // Create the Auth Context
 const AuthContext = createContext({});
@@ -19,24 +23,56 @@ export const useAuth = () => {
 // Auth Provider component
 export const AuthProvider = ({ children }) => {
   const [session, setSession] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [initializing, setInitializing] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [user, setUser] = useState(null);
   const [pendingNavigation, setPendingNavigation] = useState(null);
+  const [activeSessionHint, setActiveSessionHint] = useState(null);
   const [sessionInvalidatedElsewhere, setSessionInvalidatedElsewhere] = useState(false);
+  const launchStartedAtRef = useRef(Date.now());
+  const launchTrackedRef = useRef(false);
 
   useEffect(() => {
     // Get initial session
     const getInitialSession = async () => {
+      let initialSession = null;
       try {
-        const {
-          data: { session: initialSession },
-        } = await supabase.auth.getSession();
-        setSession(initialSession);
-        setUser(initialSession?.user ?? null);
+        const [accessToken, storedUser] = await Promise.all([
+          authStorage.getAccessToken(),
+          authStorage.getUser(),
+        ]);
+
+        if (accessToken) {
+          initialSession = { access_token: accessToken, user: storedUser };
+          setSession(initialSession);
+          setUser(storedUser ?? null);
+
+          try {
+            const { data: freshUser } = await client.get('/users/me', {
+              skipSessionInvalidation: true,
+            });
+            initialSession = { access_token: accessToken, user: freshUser };
+            await authStorage.setSession(accessToken, freshUser);
+            setSession(initialSession);
+            setUser(freshUser);
+          } catch (error) {
+            await authStorage.clearSession();
+            initialSession = null;
+            setSession(null);
+            setUser(null);
+          }
+        }
       } catch (error) {
         console.error('Error getting initial session:', error);
       } finally {
-        setLoading(false);
+        setInitializing(false);
+        if (!launchTrackedRef.current) {
+          launchTrackedRef.current = true;
+          analyticsService.track('app_launch', {
+            elapsed_ms: Date.now() - launchStartedAtRef.current,
+            signed_in: Boolean(initialSession),
+          });
+        }
       }
     };
 
@@ -53,6 +89,39 @@ export const AuthProvider = ({ children }) => {
         hasToken: Boolean(queryParams?.token),
         hasAuthTokens: Boolean(queryParams?.access_token && queryParams?.refresh_token),
       });
+
+      if (queryParams?.token) {
+        try {
+          const inviteResponse = await client.get(`/invites/${encodeURIComponent(queryParams.token)}`);
+          const resolvedRequestId = inviteResponse?.data?.request_id;
+          if (resolvedRequestId) {
+            try {
+              await client.post(`/invites/${encodeURIComponent(queryParams.token)}/redeem`);
+            } catch (_) {
+              // Redeem is idempotent best-effort; routing should still continue.
+            }
+            analyticsService.track('deep_link_route_prepared', {
+              type: 'invite_request',
+              requestId: resolvedRequestId,
+              hasInviteToken: true,
+            });
+            setPendingNavigation({
+              screen: 'AcceptRequest',
+              params: {
+                linkedRequestId: resolvedRequestId,
+                inviteToken: queryParams.token,
+                fromInvite: true,
+              },
+            });
+            return;
+          }
+        } catch (error) {
+          analyticsService.track('deep_link_invite_resolution_failed', {
+            message: error?.response?.data?.detail || error?.message || 'unknown',
+          });
+          console.warn('Invite token resolution failed:', error?.response?.data || error);
+        }
+      }
 
       if (cleanPath.startsWith('request/')) {
         const [, requestId] = cleanPath.split('/');
@@ -114,19 +183,8 @@ export const AuthProvider = ({ children }) => {
       if (url) handleDeepLink(url);
     });
 
-    // Listen for auth state changes
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange(async (event, currentSession) => {
-      console.log('Auth state changed:', event);
-      setSession(currentSession);
-      setUser(currentSession?.user ?? null);
-      setLoading(false);
-    });
-
     // Cleanup subscription on unmount
     return () => {
-      subscription?.unsubscribe();
       linkingSubscription.remove();
     };
   }, []);
@@ -137,6 +195,8 @@ export const AuthProvider = ({ children }) => {
       setSessionInvalidatedElsewhere(true);
       setSession(null);
       setUser(null);
+      backgroundLocation.stopBackgroundSharing();
+      authStorage.clearSession();
     };
 
     authEventEmitter.on('SESSION_INVALIDATED', handleSessionInvalidated);
@@ -146,44 +206,21 @@ export const AuthProvider = ({ children }) => {
     };
   }, []);
 
-  // Sign up with email and password
-  const signUpWithEmail = async (email, password) => {
-    try {
-      setLoading(true);
-      const { data, error } = await supabase.auth.signUp({
-        email,
-        password,
-      });
-      if (error) throw error;
-      return data;
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Sign in with email and password
-  const signInWithEmail = async (email, password) => {
-    try {
-      setLoading(true);
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
-      if (error) throw error;
-      return data;
-    } finally {
-      setLoading(false);
-    }
-  };
-
   // Sign in with Phone (Send OTP)
   const signInWithPhone = async phone => {
     try {
       setLoading(true);
-      const { data, error } = await supabase.auth.signInWithOtp({
-        phone,
+      await backgroundLocation.stopBackgroundSharing();
+      await authStorage.clearSession();
+      setSession(null);
+      setUser(null);
+      setPendingNavigation(null);
+
+      const { data } = await client.post('/auth/otp/start', {
+        phone_e164: phone,
+      }, {
+        skipSessionInvalidation: true,
       });
-      if (error) throw error;
       return data;
     } finally {
       setLoading(false);
@@ -194,55 +231,41 @@ export const AuthProvider = ({ children }) => {
   const verifyPhoneOTP = async (phone, token) => {
     try {
       setLoading(true);
-      const { data, error } = await supabase.auth.verifyOtp({
-        phone,
-        token,
-        type: 'sms',
+      const deviceId = await authStorage.getDeviceId();
+      const { data } = await client.post('/auth/otp/verify', {
+        phone_e164: phone,
+        otp_code: token,
+        device_id: deviceId,
+      }, {
+        skipSessionInvalidation: true,
       });
-      if (error) throw error;
+
+      const nextSession = {
+        access_token: data.access_token,
+        user: data.user,
+      };
+      await authStorage.setSession(data.access_token, data.user);
+      setSession(nextSession);
+      setUser(data.user);
       return data;
     } finally {
       setLoading(false);
     }
   };
 
-  // Reset Password Request
-  const resetPasswordForEmail = async email => {
-    try {
-      setLoading(true);
-      const { data, error } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: Linking.createURL('/reset-password'),
-      });
-      if (error) throw error;
-      return data;
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Update User Password (after reset)
-  const updateUserPassword = async new_password => {
-    try {
-      setLoading(true);
-      const { data, error } = await supabase.auth.updateUser({
-        password: new_password,
-      });
-      if (error) throw error;
-      return data;
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Update current user account details (email/phone/password/metadata)
+  // Update current user account details.
   const updateAccountDetails = async updates => {
     try {
       setLoading(true);
-      const { data, error } = await supabase.auth.updateUser(updates);
-      if (error) throw error;
-      if (data?.user) {
-        setUser(data.user);
+      const { data } = await client.post('/users/profile', {
+        display_name: updates.display_name,
+      });
+      const accessToken = await authStorage.getAccessToken();
+      if (accessToken) {
+        await authStorage.setSession(accessToken, data);
       }
+      setUser(data);
+      setSession(prev => (prev ? { ...prev, user: data } : prev));
       return data;
     } finally {
       setLoading(false);
@@ -253,26 +276,9 @@ export const AuthProvider = ({ children }) => {
   const signOut = async () => {
     try {
       setLoading(true);
-      const { error } = await supabase.auth.signOut();
-      if (!error) {
-        return { mode: 'remote' };
-      }
-
-      const message = (error?.message || '').toLowerCase();
-      const isNetworkFailure = message.includes('network request failed') || message.includes('failed to fetch');
-
-      if (!isNetworkFailure) {
-        throw error;
-      }
-
-      // If network is unavailable, perform local-only sign-out so users can still leave the session.
-      const { error: localError } = await supabase.auth.signOut({ scope: 'local' });
-      if (localError) {
-        setSession(null);
-        setUser(null);
-        throw localError;
-      }
-
+      await authStorage.clearSession();
+      setSession(null);
+      setUser(null);
       return { mode: 'local' };
     } catch (error) {
       console.error('Error signing out:', error);
@@ -293,20 +299,32 @@ export const AuthProvider = ({ children }) => {
     setSessionInvalidatedElsewhere(false);
   };
 
+  const rememberActiveSession = hint => {
+    if (!hint?.session_id) return;
+    setActiveSessionHint(prev => ({
+      ...(prev || {}),
+      ...hint,
+    }));
+  };
+
+  const clearActiveSessionHint = () => {
+    setActiveSessionHint(null);
+  };
+
   const value = {
     session,
     user,
     loading,
+    initializing,
+    activeSessionHint,
+    rememberActiveSession,
+    clearActiveSessionHint,
     pendingNavigation,
     consumePendingNavigation,
     sessionInvalidatedElsewhere,
     clearSessionInvalidatedFlag,
-    signUpWithEmail,
-    signInWithEmail,
     signInWithPhone,
     verifyPhoneOTP,
-    resetPasswordForEmail,
-    updateUserPassword,
     updateAccountDetails,
     signOut,
   };

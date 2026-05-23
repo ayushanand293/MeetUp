@@ -10,8 +10,9 @@ from uuid import UUID
 import redis.asyncio as redis
 from fastapi import WebSocket
 
-from app.core.metrics import track_message_broadcasted, track_ws_connection_close, track_ws_connection_open
+from app.core.metrics import track_message_broadcasted, track_reconnect_count_per_session, track_ws_connection_close, track_ws_connection_open
 from app.core.redis import get_redis
+from app.core.scrub import scrub_sensitive
 
 from .schemas import PresenceEvent, PresencePayload, PresenceStatus
 
@@ -47,11 +48,18 @@ class ConnectionManager:
         """Accept WebSocket connection and subscribe to session channel."""
         await websocket.accept()
 
+        # Detect reconnect: user already had a connection to this session
+        existing_users_in_session = {
+            self.ws_to_user[ws] for ws in self.active_connections.get(session_id, set())
+        }
+        if user_id in existing_users_in_session:
+            track_reconnect_count_per_session(str(session_id), str(user_id))
+
         # Register local connection
         self.active_connections[session_id].add(websocket)
         self.ws_to_user[websocket] = user_id
 
-        logger.info(f"User {user_id} connected to session {session_id}")
+        logger.info(scrub_sensitive(f"User {user_id} connected to session {session_id}"))
         track_ws_connection_open(str(session_id))
 
         # Subscribe to Redis channel for this session (if not already subscribed)
@@ -77,7 +85,7 @@ class ConnectionManager:
         if websocket in self.ws_to_user:
             del self.ws_to_user[websocket]
 
-        logger.info(f"User {user_id} disconnected from session {session_id}")
+        logger.info(scrub_sensitive(f"User {user_id} disconnected from session {session_id}"))
         track_ws_connection_close(str(session_id))
 
         # Broadcast presence: user is OFFLINE
@@ -122,7 +130,7 @@ class ConnectionManager:
         await pubsub.subscribe(channel)
         self.pubsub_subscriptions[session_id] = pubsub
 
-        logger.info(f"Subscribed to Redis channel: {channel}")
+        logger.info(scrub_sensitive(f"Subscribed to Redis channel: {channel}"))
 
         # Start listening for messages from Redis in background
         task = asyncio.create_task(self._listen_redis_messages(session_id, pubsub))
@@ -130,6 +138,27 @@ class ConnectionManager:
 
     async def _unsubscribe_from_session(self, session_id: UUID):
         """Unsubscribe from session's Redis channel when no local connections remain."""
+        # Cancel listener task first to avoid closing pubsub while async iterator is active.
+        if session_id in self._listener_tasks:
+            task = self._listener_tasks[session_id]
+            task.cancel()
+            try:
+                current_loop = asyncio.get_running_loop()
+                if task.get_loop() is current_loop:
+                    await asyncio.wait_for(task, timeout=1.0)
+                else:
+                    logger.warning(
+                        "Skipping await of listener task for session %s because it belongs to a different event loop",
+                        session_id,
+                    )
+            except asyncio.CancelledError:
+                pass
+            except asyncio.TimeoutError:
+                logger.warning(f"Timed out waiting for Redis listener task shutdown for session {session_id}")
+            except Exception as e:
+                logger.warning(f"Listener task shutdown raised for session {session_id}: {e}")
+            del self._listener_tasks[session_id]
+
         if session_id in self.pubsub_subscriptions:
             pubsub = self.pubsub_subscriptions[session_id]
             channel = f"session:{session_id}"
@@ -139,16 +168,10 @@ class ConnectionManager:
             except RuntimeError:
                 logger.warning("Redis pubsub close skipped because event loop is closed")
             except Exception as e:
-                logger.warning(f"Redis pubsub close failed for {channel}: {e}")
+                logger.warning(scrub_sensitive(f"Redis pubsub close failed for {channel}: {e}"))
             del self.pubsub_subscriptions[session_id]
 
-            logger.info(f"Unsubscribed from Redis channel: {channel}")
-
-        # Cancel listener task if running
-        if session_id in self._listener_tasks:
-            task = self._listener_tasks[session_id]
-            task.cancel()
-            del self._listener_tasks[session_id]
+            logger.info(scrub_sensitive(f"Unsubscribed from Redis channel: {channel}"))
 
     async def _listen_redis_messages(self, session_id: UUID, pubsub: redis.client.PubSub):
         """Listen for messages from Redis and forward to local WebSockets."""
@@ -173,9 +196,9 @@ class ConnectionManager:
                     # Forward to all local connections in this session
                     await self._forward_to_local_connections(session_id, payload, exclude_user=exclude_user)
         except asyncio.CancelledError:
-            logger.info(f"Redis listener for session {session_id} cancelled")
+            logger.info(scrub_sensitive(f"Redis listener for session {session_id} cancelled"))
         except Exception as e:
-            logger.error(f"Error listening to Redis channel for {session_id}: {e}")
+            logger.error(scrub_sensitive(f"Error listening to Redis channel for {session_id}: {e}"))
 
     async def _forward_to_local_connections(self, session_id: UUID, message: str, exclude_user: str | None = None):
         """Forward a message to all local connections in a session."""

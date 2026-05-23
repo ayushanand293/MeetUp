@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import Column, DateTime, Enum, ForeignKey
+from sqlalchemy import Column, DateTime, Enum, Float, ForeignKey, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -32,6 +32,12 @@ class MeetRequest(Base):
     status = Column(Enum(RequestStatus, create_constraint=False), default=RequestStatus.PENDING)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     expires_at = Column(DateTime(timezone=True), default=_default_expires_at)
+    destination_name = Column(Text, nullable=True)
+    destination_address = Column(Text, nullable=True)
+    destination_lat = Column(Float, nullable=True)
+    destination_lon = Column(Float, nullable=True)
+    destination_provider = Column(Text, nullable=True)
+    destination_place_id = Column(Text, nullable=True)
 
     requester = relationship("User", foreign_keys=[requester_id])
     receiver = relationship("User", foreign_keys=[receiver_id])
