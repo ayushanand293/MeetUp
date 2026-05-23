@@ -15,6 +15,7 @@ import AcceptRequestScreen from '../screens/AcceptRequestScreen';
 import RequestsTabsScreen from '../screens/RequestsTabsScreen';
 import ActiveSessionScreen from '../screens/ActiveSessionScreen';
 import SettingsScreen from '../screens/SettingsScreen';
+import ParticleBackground from '../components/ParticleBackground';
 
 const Stack = createNativeStackNavigator();
 const navigationRef = createNavigationContainerRef();
@@ -53,7 +54,7 @@ const MainStack = () => {
 };
 
 const LoadingScreen = ({ isAuthReady, onFinished }) => {
-  const { colors } = useTheme();
+  const { colors, isDark } = useTheme();
 
   const cardScale = React.useRef(new Animated.Value(0.94)).current;
   const cardOpacity = React.useRef(new Animated.Value(0)).current;
@@ -61,7 +62,6 @@ const LoadingScreen = ({ isAuthReady, onFinished }) => {
   const shimmerX = React.useRef(new Animated.Value(-180)).current;
   const barProgress = React.useRef(new Animated.Value(0.18)).current;
   const dotPulse = React.useRef(new Animated.Value(0)).current;
-  const ambient = React.useRef(new Animated.Value(0)).current;
   const completionSent = React.useRef(false);
 
   React.useEffect(() => {
@@ -179,29 +179,6 @@ const LoadingScreen = ({ isAuthReady, onFinished }) => {
     };
   }, [barProgress, cardOpacity, cardScale, dotPulse, isAuthReady, logoFloat, onFinished, shimmerX]);
 
-  React.useEffect(() => {
-    const loop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(ambient, {
-          toValue: 1,
-          duration: 2600,
-          easing: Easing.inOut(Easing.quad),
-          useNativeDriver: true,
-        }),
-        Animated.timing(ambient, {
-          toValue: 0,
-          duration: 2600,
-          easing: Easing.inOut(Easing.quad),
-          useNativeDriver: true,
-        }),
-      ])
-    );
-    loop.start();
-    return () => loop.stop();
-  }, [ambient]);
-
-  const orbUp = ambient.interpolate({ inputRange: [0, 1], outputRange: [0, -12] });
-  const orbDown = ambient.interpolate({ inputRange: [0, 1], outputRange: [0, 10] });
   const loadWidth = barProgress.interpolate({ inputRange: [0, 1], outputRange: ['18%', '100%'] });
   const dot1 = dotPulse.interpolate({ inputRange: [0, 1], outputRange: [0.3, 1] });
   const dot2 = dotPulse.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.55, 0.32, 0.85] });
@@ -209,19 +186,11 @@ const LoadingScreen = ({ isAuthReady, onFinished }) => {
 
   return (
     <View style={[styles.loadingContainer, { backgroundColor: colors.bg }]}>
-      <Animated.View
-        pointerEvents="none"
-        style={[
-          styles.loadingOrbTop,
-          { backgroundColor: colors.surfaceElevated, transform: [{ translateY: orbUp }] },
-        ]}
-      />
-      <Animated.View
-        pointerEvents="none"
-        style={[
-          styles.loadingOrbBottom,
-          { backgroundColor: colors.border, transform: [{ translateY: orbDown }] },
-        ]}
+      <ParticleBackground
+        count={40}
+        dotColor={isDark ? 'rgba(177,18,27,0.40)' : 'rgba(177,18,27,0.35)'}
+        dotColorAlt={isDark ? 'rgba(255,255,255,0.25)' : 'rgba(100,100,100,0.25)'}
+        lineColor={isDark ? 'rgba(177,18,27,0.10)' : 'rgba(177,18,27,0.06)'}
       />
 
       <Animated.View
@@ -229,16 +198,34 @@ const LoadingScreen = ({ isAuthReady, onFinished }) => {
           transform: [{ scale: cardScale }, { translateY: logoFloat }],
           opacity: cardOpacity,
         }}>
-        <View style={[styles.loadingLogoWrap, { backgroundColor: colors.surface, borderColor: colors.border }]}> 
-          <Animated.View style={[styles.loadingShimmer, { transform: [{ translateX: shimmerX }] }]} />
-          <Image source={require('../../assets/Meet up logo.png')} style={styles.loadingLogo} resizeMode="contain" />
+        <View style={[styles.loadingLogoWrap, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+          <Animated.View
+            style={[
+              styles.loadingShimmer,
+              {
+                backgroundColor: isDark ? 'rgba(255,255,255,0.16)' : 'rgba(255,255,255,0.55)',
+                transform: [{ translateX: shimmerX }, { rotateZ: '24deg' }],
+              },
+            ]}
+          />
+          <Image source={require('../../assets/meetup-logo-cropped.png')} style={styles.loadingLogo} resizeMode="contain" />
         </View>
       </Animated.View>
 
-      <Text style={[styles.loadingTitle, { color: colors.textPrimary }]}>MeetUp</Text>
-      <Text style={[styles.loadingText, { color: colors.textSecondary }]}> 
-        {isAuthReady ? 'Entering your space' : 'Preparing your space'}
-      </Text>
+      <Animated.View
+        style={[
+          styles.loadingCopy,
+          {
+            opacity: cardOpacity,
+            transform: [{ translateY: logoFloat }],
+          },
+        ]}
+      >
+        <Text style={[styles.loadingTitle, { color: colors.textPrimary }]}>MeetUp</Text>
+        <Text style={[styles.loadingText, { color: colors.textSecondary }]}>
+          {isAuthReady ? 'Entering your space' : 'Preparing your space'}
+        </Text>
+      </Animated.View>
 
       <View style={[styles.loadingTrack, { backgroundColor: colors.surfaceElevated, borderColor: colors.border }]}> 
         <Animated.View style={[styles.loadingFill, { width: loadWidth, backgroundColor: colors.textPrimary }]} />
@@ -294,32 +281,15 @@ const AppNavigator = () => {
 
 const styles = StyleSheet.create({
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  loadingOrbTop: {
-    position: 'absolute',
-    width: 240,
-    height: 240,
-    borderRadius: 120,
-    top: -100,
-    right: -70,
-    opacity: 0.42,
-  },
-  loadingOrbBottom: {
-    position: 'absolute',
-    width: 190,
-    height: 190,
-    borderRadius: 95,
-    bottom: 120,
-    left: -70,
-    opacity: 0.3,
-  },
   loadingLogoWrap: {
-    width: 176,
-    height: 176,
-    borderRadius: 30,
+    width: 160,
+    height: 160,
+    borderRadius: 36,
     borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',
+    padding: 20,
     shadowColor: '#000',
     shadowOpacity: 0.12,
     shadowOffset: { width: 0, height: 14 },
@@ -330,12 +300,13 @@ const styles = StyleSheet.create({
     position: 'absolute',
     width: 80,
     height: 260,
-    backgroundColor: 'rgba(255,255,255,0.55)',
-    transform: [{ rotateZ: '24deg' }],
   },
   loadingLogo: {
-    width: 126,
-    height: 126,
+    width: 110,
+    height: 110,
+  },
+  loadingCopy: {
+    alignItems: 'center',
   },
   loadingTitle: {
     marginTop: 22,

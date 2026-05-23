@@ -31,7 +31,7 @@
         "FOREGROUND_SERVICE_LOCATION"
       ],
       "adaptiveIcon": {
-        "foregroundImage": "./assets/Meet up logo.png",
+        "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
@@ -46,6 +46,12 @@
           "isIosBackgroundLocationEnabled": true,
           "isAndroidBackgroundLocationEnabled": true,
           "isAndroidForegroundServiceEnabled": true
+        }
+      ],
+      [
+        "expo-contacts",
+        {
+          "contactsPermission": "Allow MeetUp to access your contacts to find friends."
         }
       ]
     ],

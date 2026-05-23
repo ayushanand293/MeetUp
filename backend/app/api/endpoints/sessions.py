@@ -523,6 +523,7 @@ def get_session_history(
                 "co_participant_id": str(co_participant.id),
                 "co_participant_name": name,
                 "co_participant_email": co_participant.email,
+                "destination": destination_from_model(session),
                 "ended_at": session.ended_at.isoformat() if session.ended_at else None,
                 "created_at": session.created_at.isoformat(),
                 "duration_seconds": int((session.ended_at - session.created_at).total_seconds()) if session.ended_at else 0,

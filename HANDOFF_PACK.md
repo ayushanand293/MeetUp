@@ -144,7 +144,7 @@ mobile/
   src/
     App.jsx                          # Main navigation tree
     api/
-      client.js                      # axios instance, BASE_URL={EXPO_PUBLIC_API_URL}
+      client.js                      # axios instance, BASE_URL={EXPO_PUBLIC_API_BASE_URL}
       authStorage.js                 # AsyncStorage: getAccessToken, setSession, clearSession
     context/
       AuthContext.js                 # OTP login, token management, deep link handling
@@ -616,9 +616,9 @@ otp_verify_success_total               # Each successful POST /otp/verify
 otp_verify_fail_total                  # Each failed POST /otp/verify
 contacts_match_requests_total          # Each POST /contacts/match
 ws_connections_opened                  # Each WebSocket connection established
-ws_connections_active                  # +1 on open, -1 on close (gauge behavior)
+ws_connections_active                  # +1 on open, -1 on close (active-count counter)
 sessions_created                       # Each new session
-sessions_active                        # +1 on create, -1 on end (gauge behavior)
+sessions_active                        # +1 on create, -1 on end (active-count counter)
 auto_end_count                         # Each proximity-triggered auto-end
 manual_end_count                       # Each user-initiated end
 session_start_latency_ms_total        # Sum of start latencies (divide by session_start_count for average)
@@ -629,17 +629,13 @@ validation_error                       # Each location validation failure
 location_propagation_latency_ms        # Latency from client send to peer receive (ms)
 ```
 
-**Gauges:**
-```
-ws_connections_active                  # Current active WebSocket connections
-sessions_active                        # Current active sessions
-```
+**Gauges:** none are emitted by the current code path unless future code calls `set_gauge`.
 
 ### Metrics Backend Implementation
 
 **Storage (backend/app/core/metrics_store.py):**
-- Default: In-memory (Python dict with locks)
-- Optional: Redis-backed (if METRICS_BACKEND=redis)
+- Default: Redis-backed (`METRICS_BACKEND=redis`)
+- Optional: In-memory (`METRICS_BACKEND=memory`)
 - Snapshots exported via `/metrics` endpoint every scrape
 
 **Prometheus Scrape Config (Unknown):**
@@ -657,9 +653,8 @@ sessions_active                        # Current active sessions
 # TYPE otp_start_requests_total counter
 otp_start_requests_total 42
 
-# HELP sessions_active Gauge of active sessions
-# TYPE sessions_active gauge
-sessions_active 3
+# TYPE meetup_sessions_active counter
+meetup_sessions_active 3
 
 # ... (all metrics in text format)
 ```

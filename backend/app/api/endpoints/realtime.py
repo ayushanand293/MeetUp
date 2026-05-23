@@ -28,6 +28,9 @@ from app.realtime.schemas import (
     LocationUpdateEvent,
     PeerLocationEvent,
     PeerLocationPayload,
+    PeerRouteModeEvent,
+    PeerRouteModePayload,
+    RouteModeUpdateEvent,
     EndSessionEvent,
     SessionEndedEvent,
     SessionEndedPayload,
@@ -45,12 +48,44 @@ RATE_LIMIT_WINDOW_SEC = 1
 
 router = APIRouter()
 LAST_LOCATION_TTL_SECONDS = 600
+ROUTE_MODE_TTL_SECONDS = 7200
 
 
 async def _store_last_known_location(redis_client, session_uuid: UUID, user_id: UUID, payload) -> None:
     loc_payload = payload.model_dump()
     loc_payload["timestamp"] = loc_payload["timestamp"].isoformat()
     await redis_client.setex(f"loc:{session_uuid}:{user_id}", LAST_LOCATION_TTL_SECONDS, json.dumps(loc_payload))
+
+
+async def _store_route_mode(redis_client, session_uuid: UUID, user_id: UUID, mode: str) -> None:
+    await redis_client.setex(f"route_mode:{session_uuid}:{user_id}", ROUTE_MODE_TTL_SECONDS, mode)
+
+
+async def _send_cached_peer_route_modes(redis_client, websocket: WebSocket, session_uuid: UUID, user_id: UUID) -> None:
+    cursor = 0
+    while True:
+        cursor, keys = await redis_client.scan(cursor, match=f"route_mode:{session_uuid}:*")
+        for key in keys:
+            key_str = key.decode() if isinstance(key, bytes) else key
+            peer_id = key_str.split(":")[-1]
+            if peer_id == str(user_id):
+                continue
+
+            raw_mode = await redis_client.get(key)
+            if not raw_mode:
+                continue
+
+            mode = raw_mode.decode() if isinstance(raw_mode, bytes) else raw_mode
+            peer_mode_event = PeerRouteModeEvent(
+                payload=PeerRouteModePayload(
+                    user_id=UUID(peer_id),
+                    mode=mode,
+                )
+            )
+            await websocket.send_text(peer_mode_event.model_dump_json())
+
+        if cursor == 0:
+            break
 
 
 @router.websocket("/meetup")
@@ -127,6 +162,7 @@ async def websocket_endpoint(
     # Track previous location for jump detection
     prev_location = None
     redis_client = await get_redis()
+    await _send_cached_peer_route_modes(redis_client, websocket, session_uuid, user_id)
 
     try:
         while True:
@@ -307,6 +343,24 @@ async def websocket_endpoint(
                                     await redis_client.delete(f"prox:{session_uuid}:hits", f"prox:{session_uuid}:first_ts")
                             except Exception as e:
                                 logger.error(f"Error during proximity check: {e}", exc_info=True)
+
+                elif event_type == EventType.ROUTE_MODE_UPDATE:
+                    try:
+                        route_mode_event = RouteModeUpdateEvent(**event_data)
+                        await _store_route_mode(redis_client, session_uuid, user_id, route_mode_event.payload.mode)
+                        peer_mode_event = PeerRouteModeEvent(
+                            payload=PeerRouteModePayload(
+                                user_id=user_id,
+                                mode=route_mode_event.payload.mode,
+                            )
+                        )
+                        await manager.broadcast(session_uuid, peer_mode_event.model_dump_json(), exclude_user=user_id)
+                    except Exception as e:
+                        track_validation_error("route_mode_parse_error")
+                        error_event = ErrorEvent(
+                            payload=ErrorPayload(code="INVALID_PAYLOAD", message=f"Failed to parse route mode: {str(e)}")
+                        )
+                        await websocket.send_text(error_event.model_dump_json())
 
                 elif event_type == EventType.END_SESSION:
                     # Handle end session (triggers session end via DB and broadcasts)

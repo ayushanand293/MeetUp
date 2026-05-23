@@ -65,10 +65,10 @@ The MeetUp mobile client requires a few environment variables to function correc
 - **Prod Behavior:** If omitted in a production build, the app will throw a fatal error on launch: `CRITICAL: EXPO_PUBLIC_API_BASE_URL is not set for production build.`
 
 ### `EXPO_PUBLIC_CLIENT_LOCATION_FOREGROUND_ONLY`
-- **Description:** Legacy kill switch for foreground-only location behavior.
+- **Description:** Foreground-only location kill switch used by `mobile/src/config.js`.
 - **Required:** No
 - **Default:** `true`
-- **Current app behavior:** Active meetup sessions now attempt best-effort background sharing through Expo background location. If the OS denies background permission or power settings throttle the app, MeetUp degrades to foreground-only behavior and shows a non-blocking banner.
+- **Current app behavior:** Set to `false` for production/staging builds that should attempt active-session background sharing. If omitted, the foreground tracking service pauses when the app backgrounds, while `ActiveSessionScreen` still attempts the dedicated Expo background sharing task and degrades with a non-blocking banner if permission/startup fails.
 
 ## Mobile Background Location Configuration
 
@@ -144,6 +144,8 @@ To ensure production readiness, the backend supports strict CORS and environment
   - **Failover:** In development, if Redis is unreachable but `METRICS_BACKEND=redis`, the system falls back to `memory` automatically.
 
 ## Observability & Metrics
+
+Metrics currently exports `counters` and `gauges` maps. `ws_connections_active` and `sessions_active` are stored in the counters map and are incremented/decremented to behave like active counts; they are not exported as Prometheus gauges unless the implementation changes to call `set_gauge`.
 
 ### Viewing Metrics
 - **JSON:** `GET /api/v1/metrics`
