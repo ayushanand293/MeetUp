@@ -2,6 +2,9 @@
 .DS_Store
 .AppleDouble
 .LSOverride
+Thumbs.db
+ehthumbs.db
+Desktop.ini
 
 # Python
 __pycache__/
@@ -13,6 +16,8 @@ __pycache__/
 .mypy_cache/
 .pytest_cache/
 .coverage
+.coverage.*
+coverage.xml
 htmlcov/
 .tox/
 .nox/
@@ -38,7 +43,11 @@ wheels/
 # Virtual Environment
 venv/
 .venv/
+ENV/
 .env
+.env.*
+!.env.example
+!**/.env.example
 
 # Docker
 docker-compose.override.yml
@@ -46,18 +55,29 @@ docker-compose.override.yml
 # IDEs
 .idea/
 .vscode/
+*.iml
 *.swp
 *.swo
+*.swn
 
 # Logs
 *.log
+logs/
 
-# Node (Mobile/Web placeholder)
+# Node / Expo / web builds
 node_modules/
 npm-debug.log
 yarn-error.log
+pnpm-debug.log
 .expo/
 dist/
+build/
+.turbo/
+.next/
+coverage/
+web/dist/
 
 # MeetUp specific
 postgres_data/
+tmp/
+out/

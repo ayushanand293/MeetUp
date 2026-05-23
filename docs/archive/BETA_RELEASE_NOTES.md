@@ -1,3 +1,9 @@
+# ARCHIVED - 2026-05-23
+
+This document is preserved for historical context. Current interviewer/deployment docs live in README.md, docs/INTERVIEWER_QUICKSTART.md, docs/ops_predeploy.md, docs/demo_script.md, and docs/interview_story.md.
+
+---
+
 # MeetUp Beta v0.1.0 Release Notes
 
 Welcome to the Beta Release of MeetUp!

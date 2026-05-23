@@ -7,6 +7,7 @@ import redis
 
 from app.core.config import settings
 from app.core.database import SessionLocal
+from app.core.identity import phone_digest, phone_hash
 from app.models.session import Session, SessionParticipant, SessionStatus
 from app.models.user import User
 
@@ -21,12 +22,24 @@ def create_test_token(user_id: str) -> str:
         "aud": "authenticated",
         "email": f"user_{user_id[:4]}@example.com",
     }
-    # Verify we have a key
-    key = settings.SUPABASE_KEY
+    key = settings.AUTH_JWT_SECRET or settings.SUPABASE_KEY
     if not key:
-        print("⚠️  WARNING: SUPABASE_KEY is empty. Tokens will be insecure.")
+        print("⚠️  WARNING: AUTH_JWT_SECRET and SUPABASE_KEY are empty. Tokens will be insecure.")
 
     return jwt.encode(payload, key or "", algorithm="HS256")
+
+
+def demo_user(user_id, name: str, phone_e164: str) -> User:
+    return User(
+        id=user_id,
+        phone_e164=phone_e164,
+        phone_verified_at=datetime.utcnow(),
+        phone_hash=phone_hash(phone_e164),
+        phone_digest=phone_digest(settings.CONTACTS_HASH_VERSION, phone_e164),
+        email=f"{name.lower()}_{str(user_id)[:4]}@test.com",
+        display_name=name,
+        profile_data={"name": name},
+    )
 
 
 def seed():
@@ -38,8 +51,8 @@ def seed():
         user1_id = uuid.uuid4()
         user2_id = uuid.uuid4()
 
-        user1 = User(id=user1_id, email=f"alice_{str(user1_id)[:4]}@test.com")
-        user2 = User(id=user2_id, email=f"bob_{str(user2_id)[:4]}@test.com")
+        user1 = demo_user(user1_id, "Alice", "+15550100001")
+        user2 = demo_user(user2_id, "Bob", "+15550100002")
 
         db.add(user1)
         db.add(user2)
@@ -92,9 +105,9 @@ def seed():
         marcus_id = uuid.uuid4()
         jordan_id = uuid.uuid4()
         
-        sarah = User(id=sarah_id, email=f"sarah_{str(sarah_id)[:4]}@test.com", profile_data={"name": "Sarah"})
-        marcus = User(id=marcus_id, email=f"marcus_{str(marcus_id)[:4]}@test.com", profile_data={"name": "Marcus"})
-        jordan = User(id=jordan_id, email=f"jordan_{str(jordan_id)[:4]}@test.com", profile_data={"name": "Jordan"})
+        sarah = demo_user(sarah_id, "Sarah", "+15550100003")
+        marcus = demo_user(marcus_id, "Marcus", "+15550100004")
+        jordan = demo_user(jordan_id, "Jordan", "+15550100005")
         
         db.add(sarah)
         db.add(marcus)

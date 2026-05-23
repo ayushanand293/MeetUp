@@ -1,3 +1,9 @@
+# ARCHIVED - 2026-05-23
+
+This document is preserved for historical context. Current interviewer/deployment docs live in README.md, docs/INTERVIEWER_QUICKSTART.md, docs/ops_predeploy.md, docs/demo_script.md, and docs/interview_story.md.
+
+---
+
 # MeetUp Frontend + Mobile Progress Tracker
 
 Last updated: 2026-03-31 (Code complete, entering QA)

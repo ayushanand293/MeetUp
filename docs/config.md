@@ -97,6 +97,19 @@ Background sharing is only started from `ActiveSessionScreen` after an active se
 - **Required:** No
 - **Default:** `true`
 
+### `EXPO_PUBLIC_SUPABASE_URL`
+- **Description:** Optional Supabase project URL used only by the legacy/magic-link compatibility path in `mobile/src/api/supabase.js`.
+- **Required:** No for the current phone OTP flow.
+
+### `EXPO_PUBLIC_SUPABASE_KEY`
+- **Description:** Optional Supabase anon key used only by the legacy/magic-link compatibility path in `mobile/src/api/supabase.js`.
+- **Required:** No for the current phone OTP flow.
+
+### `EXPO_PUBLIC_MOCK_LAT` / `EXPO_PUBLIC_MOCK_LON`
+- **Description:** Optional development-only mock coordinate pair used by `mobile/src/services/locationService.js`.
+- **Required:** No.
+- **Safety:** Do not set in production builds.
+
 ## Example Usage
 
 ### Local Testing (iOS Simulator / Android Emulator)
