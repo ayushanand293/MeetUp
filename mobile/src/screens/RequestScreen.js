@@ -6,14 +6,12 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Location from 'expo-location';
-import { useAuth } from '../context/AuthContext';
 import client from '../api/client';
 import { useTheme, Spacing, Radius, Font, anim } from '../theme';
 
 const RequestScreen = ({ route, navigation }) => {
     const { colors } = useTheme();
     const { friend } = route.params || {};
-    const { user } = useAuth();
     const [loading, setLoading] = useState(false);
     const [requestSent, setRequestSent] = useState(false);
     const [sentRequestId, setSentRequestId] = useState(null);
@@ -100,6 +98,8 @@ const RequestScreen = ({ route, navigation }) => {
             Animated.timing(cardOp, { toValue: 1, duration: 450, useNativeDriver: true }),
             Animated.spring(ringScale, { toValue: 1, useNativeDriver: true, tension: 40, delay: 200 }),
         ]).start();
+    // Entrance animation should run once with stable Animated.Value refs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     useEffect(() => {
@@ -137,7 +137,6 @@ const RequestScreen = ({ route, navigation }) => {
                     lastKnownOutgoingRequestIdRef.current = pendingToFriend[0]?.id || lastKnownOutgoingRequestIdRef.current;
                 }
 
-                const previousPending = outgoingPendingCountRef.current;
                 const currentPending = pendingToFriend.length;
                 outgoingPendingCountRef.current = currentPending;
 

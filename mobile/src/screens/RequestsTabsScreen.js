@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
     View, Text, FlatList, TouchableOpacity,
-    Alert, ActivityIndicator, RefreshControl, Animated, Dimensions, TouchableWithoutFeedback,
+    Alert, ActivityIndicator, RefreshControl, Animated, TouchableWithoutFeedback,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import client from '../api/client';
@@ -85,7 +85,7 @@ const RequestsTabsScreen = ({ route, navigation }) => {
             if (!silent) Alert.alert('Could Not Load Requests', 'Please check your connection and try again.');
         }
         finally { setLoading(false); setRefreshing(false); }
-    }, []);
+    }, [navigation]);
 
     const prioritizedIncomingRequests = useMemo(() => {
         if (!linkedRequestId) return incomingRequests;
@@ -341,6 +341,8 @@ const IncomingRequestCard = ({ item, index, colors, accepting, onAccept, onDecli
             Animated.timing(opacity, { toValue: 1, duration: 300, delay: index * 60, useNativeDriver: true }),
             Animated.spring(translateY, { toValue: 0, delay: index * 60, useNativeDriver: true, tension: 80 }),
         ]).start();
+    // Card entrance animation should run once when the card mounts.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     const initials = (item.requester_name || '?')[0].toUpperCase();
@@ -487,6 +489,8 @@ const OutgoingRequestCard = ({ item, index, colors }) => {
             Animated.timing(opacity, { toValue: 1, duration: 300, delay: index * 60, useNativeDriver: true }),
             Animated.spring(translateY, { toValue: 0, delay: index * 60, useNativeDriver: true, tension: 80 }),
         ]).start();
+    // Card entrance animation should run once when the card mounts.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     // Calculate waiting time from created_at

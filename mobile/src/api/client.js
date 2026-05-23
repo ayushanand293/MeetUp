@@ -70,7 +70,7 @@ const client = axios.create({
     },
 });
 
-// Interceptor to add the Supabase JWT to every request
+// Interceptor to add the backend-issued JWT to every request
 client.interceptors.request.use(
     async (config) => {
         const token = await authStorage.getAccessToken();

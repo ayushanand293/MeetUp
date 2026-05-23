@@ -275,12 +275,12 @@ useEffect(() => {
 
 ### Web Fallback (3 core features)
 
-#### 7️⃣ Supabase Auth Integration ✅
-**File**: `web/src/services/supabaseClient.js`
+#### 7️⃣ Legacy Auth Auth Integration ✅
+**File**: `web/src/services/legacy-authClient.js`
 
 ```javascript
 export async function signInWithEmail(email, password) {
-  const { data, error } = await supabase.auth.signInWithPassword({
+  const { data, error } = await legacy-auth.auth.signInWithPassword({
     email,
     password
   })
@@ -289,7 +289,7 @@ export async function signInWithEmail(email, password) {
 ```
 
 **Features**:
-- ✅ Email/password login (Supabase)
+- ✅ Email/password login (Legacy Auth)
 - ✅ Session persistence (browser storage)
 - ✅ Logout functionality
 - ✅ Auth state listener
@@ -399,7 +399,7 @@ map.fitBounds(bounds, { padding: [50, 50] })
 **Login Flow**:
 ```
 1. App loads
-2. Check Supabase session (onAuthStateChange)
+2. Check Legacy Auth session (onAuthStateChange)
 3. If no user → LoginScreen
 4. If user → Ask for session_id
 5. Enter session_id → Load SessionMap
@@ -515,7 +515,7 @@ web/
 │   │   ├── LoginScreen.jsx      # Auth UI (200 lines)
 │   │   └── SessionMap.jsx       # Map + polling (250 lines)
 │   ├── services/
-│   │   ├── supabaseClient.js    # Auth operations (40 lines)
+│   │   ├── legacy-authClient.js    # Auth operations (40 lines)
 │   │   └── snapshotService.js   # API + polling (50 lines)
 │   └── styles/
 │       └── App.css              # Responsive design (400+ lines)
@@ -540,7 +540,7 @@ web/
 
 ### Web ✅
 - [x] React + Vite scaffold
-- [x] Supabase Auth login
+- [x] Legacy Auth Auth login
 - [x] Snapshot polling every 2s
 - [x] Live Leaflet map
 - [x] Pause/resume controls

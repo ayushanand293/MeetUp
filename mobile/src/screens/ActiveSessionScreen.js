@@ -117,7 +117,7 @@ const formatSessionDistance = (meters) => {
 const ActiveSessionScreen = ({ route, navigation }) => {
   const { friend, sessionId: routeSessionId, inviteToken } = route.params || {};
   const { user, rememberActiveSession, clearActiveSessionHint } = useAuth();
-  const { colors, isDark } = useTheme();
+  const { colors } = useTheme();
   const s = makeStyles(colors);
   const isFocused = useIsFocused();
 
@@ -136,7 +136,7 @@ const ActiveSessionScreen = ({ route, navigation }) => {
   // Session state
   const [sessionId, setSessionId] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [isStopping, setIsStopping] = useState(false);
+  const [, setIsStopping] = useState(false);
   const [isSharingInvite, setIsSharingInvite] = useState(false);
 
   // Routing state
@@ -220,7 +220,7 @@ const ActiveSessionScreen = ({ route, navigation }) => {
 
   // Peer info
   const [peerLastSeenText, setPeerLastSeenText] = useState('Not yet connected');
-  const [peerIsStale, setPeerIsStale] = useState(false);
+  const [, setPeerIsStale] = useState(false);
   const [peerMayBeDelayed, setPeerMayBeDelayed] = useState(false);
   const [sharingPausedText, setSharingPausedText] = useState('');
   const [backgroundSharingText, setBackgroundSharingText] = useState('');
@@ -253,7 +253,6 @@ const ActiveSessionScreen = ({ route, navigation }) => {
   const [isSharingPaused, setIsSharingPaused] = useState(false);
   const awaitingFirstUpdateAfterResumeRef = useRef(false);
   const lastPropagationMetricAtRef = useRef(0);
-  const reconnectMetricEmittedRef = useRef(false);
   const sessionIdRef = useRef(null);
 
   useEffect(() => {
@@ -573,6 +572,9 @@ const ActiveSessionScreen = ({ route, navigation }) => {
     return () => {
       _cleanup();
     };
+  // Existing session startup/teardown is intentionally owned by route changes
+  // and retry attempts; broad deps would resubscribe realtime services mid-session.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initAttempt, routeSessionId, inviteToken, friend, navigation, _subscribeToLocationEvents, _cleanup]);
 
   /**
@@ -763,6 +765,9 @@ const ActiveSessionScreen = ({ route, navigation }) => {
     });
 
     wsEventUnsubscribesRef.current = unsubscribes;
+  // WS event subscriptions are registered during session initialization and
+  // removed by _cleanup; including navigation/cleanup deps would resubscribe.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id]);
 
   /**
@@ -890,7 +895,7 @@ const ActiveSessionScreen = ({ route, navigation }) => {
     }, 2000); // 2s debounce
 
     return () => clearTimeout(routeFetchRef.current);
-  }, [myLocation?.lat, myLocation?.lon, peerLocation?.lat, peerLocation?.lon, selectedMode, destination]);
+  }, [myLocation, peerLocation, selectedMode, peerName, destination, destinationRouteCoords, peerDestinationRouteCoords, injectMapData]);
 
   /**
    * Fetch route guidance to the selected destination.
@@ -947,7 +952,7 @@ const ActiveSessionScreen = ({ route, navigation }) => {
     }, 1800);
 
     return () => clearTimeout(destinationRouteFetchRef.current);
-  }, [destination?.lat, destination?.lon, myLocation?.lat, myLocation?.lon, peerLocation?.lat, peerLocation?.lon, selectedMode, peerSelectedMode]);
+  }, [destination, myLocation, peerLocation, selectedMode, peerSelectedMode]);
 
   const destinationDistanceText = destinationRouteDistance != null
     ? formatDistance(destinationRouteDistance)
@@ -1078,6 +1083,9 @@ const ActiveSessionScreen = ({ route, navigation }) => {
         },
       ]
     );
+  // End-session handler intentionally uses the cleanup callback established for
+  // the active session lifecycle.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, navigation, clearActiveSessionHint]);
 
   const handleImHere = useCallback(async () => {
@@ -1803,7 +1811,7 @@ const ActiveSessionScreen = ({ route, navigation }) => {
             <View style={s.arrivalActionPulse}>
               <View style={s.arrivalActionDot} />
             </View>
-            <Text style={s.arrivalActionText}>I'm Here</Text>
+            <Text style={s.arrivalActionText}>I&apos;m Here</Text>
           </TouchableOpacity>
         </Animated.View>
       )}
@@ -1867,7 +1875,7 @@ const ActiveSessionScreen = ({ route, navigation }) => {
           <Animated.View style={[s.successCard, { transform: [{ scale: successPulse }] }]}>
             <Text style={s.successEmoji}>🎉</Text>
             <Text style={s.successTitle}>Meeting Detected!</Text>
-            <Text style={s.successText}>You've arrived securely.</Text>
+            <Text style={s.successText}>You&apos;ve arrived securely.</Text>
           </Animated.View>
         </View>
       </Modal>
