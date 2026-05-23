@@ -1,4 +1,5 @@
 fastapi
+starlette>=1.0.1
 uvicorn[standard]
 sqlalchemy
 alembic

@@ -1,6 +1,5 @@
 
 import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
-import { supabase } from '../api/supabase';
 import * as Linking from 'expo-linking';
 import client from '../api/client';
 import { authStorage } from '../api/authStorage';
@@ -78,7 +77,7 @@ export const AuthProvider = ({ children }) => {
 
     getInitialSession();
 
-    // Handle deep links for magic link login
+    // Handle app deep links
     const handleDeepLink = async url => {
       if (!url) return;
       const { path, queryParams } = Linking.parse(url);
@@ -87,7 +86,6 @@ export const AuthProvider = ({ children }) => {
       analyticsService.track('deep_link_opened', {
         path: cleanPath || null,
         hasToken: Boolean(queryParams?.token),
-        hasAuthTokens: Boolean(queryParams?.access_token && queryParams?.refresh_token),
       });
 
       if (queryParams?.token) {
@@ -156,19 +154,6 @@ export const AuthProvider = ({ children }) => {
               fromInvite: true,
             },
           });
-        }
-      }
-
-      if (queryParams?.access_token && queryParams?.refresh_token) {
-        const { error } = await supabase.auth.setSession({
-          access_token: queryParams.access_token,
-          refresh_token: queryParams.refresh_token,
-        });
-        if (error) {
-          analyticsService.track('deep_link_auth_session_failed', { message: error?.message || 'unknown' });
-          console.error('Error setting session from deep link:', error);
-        } else {
-          analyticsService.track('deep_link_auth_session_set');
         }
       }
     };

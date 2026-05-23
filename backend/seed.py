@@ -22,11 +22,7 @@ def create_test_token(user_id: str) -> str:
         "aud": "authenticated",
         "email": f"user_{user_id[:4]}@example.com",
     }
-    key = settings.AUTH_JWT_SECRET or settings.SUPABASE_KEY
-    if not key:
-        print("⚠️  WARNING: AUTH_JWT_SECRET and SUPABASE_KEY are empty. Tokens will be insecure.")
-
-    return jwt.encode(payload, key or "", algorithm="HS256")
+    return jwt.encode(payload, settings.AUTH_JWT_SECRET, algorithm=settings.AUTH_JWT_ALGORITHM)
 
 
 def demo_user(user_id, name: str, phone_e164: str) -> User:
