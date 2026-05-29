@@ -8,9 +8,16 @@ The repo contains a FastAPI/Postgres/Redis backend and an Expo React Native mobi
 
 ## Demo
 
-- Demo video placeholder: [docs/demo_video.md](docs/demo_video.md). Record a short two-device walkthrough before sharing the repo externally.
-- Fast local run: [docs/INTERVIEWER_QUICKSTART.md](docs/INTERVIEWER_QUICKSTART.md)
-- Two-device walkthrough: [docs/demo_script.md](docs/demo_script.md)
+1. Watch demo video (recommended): [docs/demo_video.md](docs/demo_video.md)
+2. Optional: Verify locally:
+
+   ```bash
+   ./scripts/interviewer_quickcheck.sh
+   ```
+
+ORS routing is optional; if `EXPO_PUBLIC_ORS_KEY` is not set, the app still works and shows destination + distance/open-in-maps instead of in-app routing.
+
+Local verification details: [docs/INTERVIEWER_QUICKSTART.md](docs/INTERVIEWER_QUICKSTART.md)
 
 ## Features
 
@@ -48,62 +55,6 @@ More details:
 - `backend/app/core/rate_limit.py`: Redis-backed rate limiting with fail-closed behavior.
 - `mobile/src/screens/ActiveSessionScreen.js`: active session UI, peer freshness, destination display, and session controls.
 - `backend/app/api/endpoints/invites.py`: unmatched-contact invite creation, token resolution, and deep-link acceptance.
-
-## One-Command Local Run
-
-```bash
-docker compose up -d --build
-```
-
-Then verify:
-
-```bash
-docker compose exec -T backend alembic upgrade head
-docker compose exec -T backend pytest -q
-./scripts/beta_smoke.sh
-```
-
-Backend endpoints:
-- `GET http://localhost:8000/health`
-- `GET http://localhost:8000/ready`
-- `GET http://localhost:8000/api/v1/metrics?format=prometheus`
-
-## Proof
-
-- One-command interviewer gate: `./scripts/interviewer_quickcheck.sh`
-- Backend regression suite: `docker compose exec -T backend pytest -q`
-- Smoke flow: `./scripts/beta_smoke.sh`
-- Runtime signals: `/health`, `/ready`, and `/api/v1/metrics?format=prometheus`
-
-## Mobile Setup
-
-```bash
-cd mobile
-npm install
-EXPO_PUBLIC_API_BASE_URL=http://localhost:8000/api/v1 npm run start
-```
-
-For a physical device on LAN, use your machine IP:
-
-```bash
-EXPO_PUBLIC_API_BASE_URL=http://YOUR_LAN_IP:8000/api/v1 npm run start
-```
-
-Optional routing:
-
-```bash
-EXPO_PUBLIC_ORS_KEY=<openrouteservice-key>
-```
-
-## Demo Mode
-
-Local demo uses the smoke script and seeded users rather than real SMS delivery:
-
-```bash
-./scripts/beta_smoke.sh
-```
-
-The backend OTP sender is currently a provider placeholder in `backend/app/api/endpoints/auth.py`. `OTP_DEV_ECHO_ENABLED=true` can echo OTPs in non-production environments only; real public deployment needs an SMS provider wired before `OTP_DEV_ECHO_ENABLED=false` is usable for sign-in.
 
 ## Security And Privacy
 
