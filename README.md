@@ -8,16 +8,8 @@ The repo contains a FastAPI/Postgres/Redis backend and an Expo React Native mobi
 
 ## Demo
 
-1. Watch demo video (recommended): [docs/demo_video.md](docs/demo_video.md)
-2. Optional: Verify locally:
-
-   ```bash
-   ./scripts/interviewer_quickcheck.sh
-   ```
-
-ORS routing is optional; if `EXPO_PUBLIC_ORS_KEY` is not set, the app still works and shows destination + distance/open-in-maps instead of in-app routing.
-
-Local verification details: [docs/INTERVIEWER_QUICKSTART.md](docs/INTERVIEWER_QUICKSTART.md)
+- Watch demo video (recommended): https://youtube.com/shorts/mXMgxdtthV8?feature=share
+- Optional: Verify locally: `./scripts/interviewer_quickcheck.sh`
 
 ## Features
 
