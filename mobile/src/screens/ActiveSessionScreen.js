@@ -50,8 +50,20 @@ import ModernDistanceBar from '../components/ModernDistanceBar';
 const DEBUG = process.env.NODE_ENV !== 'production';
 const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
 const DEFAULT_ROUTE_MODE = TransportMode.WALKING.id;
+const ROUTE_REFRESH_MS = 5000;
 const isValidRouteMode = mode => Object.values(TransportMode).some(item => item.id === mode);
 const routeModeStorageKey = (sessionId, userId, scope = 'me') => `meetup_route_mode:${sessionId}:${userId || 'anon'}:${scope}`;
+
+const isRateLimitError = (payload) => {
+  const code = String(payload?.code || '').toUpperCase();
+  const message = String(payload?.message || '').toLowerCase();
+  return (
+    code === 'RATE_LIMIT_EXCEEDED' ||
+    message.includes('rate limit') ||
+    message.includes('too many updates') ||
+    message.includes('maximum 1 location update')
+  );
+};
 
 const getSessionEndMessage = (reason) => {
   if (reason === 'USER_ACTION') return 'The meetup was ended by one of you.';
@@ -114,6 +126,16 @@ const formatSessionDistance = (meters) => {
   return `${km.toFixed(km >= 10 ? 1 : 2)} km`;
 };
 
+const estimateDurationForMode = (distanceM, mode) => {
+  if (distanceM == null || Number.isNaN(distanceM)) return null;
+  const speedByMode = {
+    [TransportMode.WALKING.id]: 1.4,
+    [TransportMode.CYCLING.id]: 4.5,
+    [TransportMode.DRIVING.id]: 11,
+  };
+  return distanceM / (speedByMode[mode] || speedByMode[TransportMode.WALKING.id]);
+};
+
 const ActiveSessionScreen = ({ route, navigation }) => {
   const { friend, sessionId: routeSessionId, inviteToken } = route.params || {};
   const { user, rememberActiveSession, clearActiveSessionHint } = useAuth();
@@ -148,7 +170,8 @@ const ActiveSessionScreen = ({ route, navigation }) => {
   const [routeDistance, setRouteDistance] = useState(null);
   const [routeDuration, setRouteDuration] = useState(null);
   const [routeLoading, setRouteLoading] = useState(false);
-  const routeFetchRef = useRef(null);
+  const lastRouteFetchAtRef = useRef(0);
+  const routeFetchInFlightRef = useRef(false);
   const [destinationRouteCoords, setDestinationRouteCoords] = useState(null);
   const [destinationRouteDistance, setDestinationRouteDistance] = useState(null);
   const [destinationRouteDuration, setDestinationRouteDuration] = useState(null);
@@ -156,7 +179,8 @@ const ActiveSessionScreen = ({ route, navigation }) => {
   const [peerDestinationRouteDistance, setPeerDestinationRouteDistance] = useState(null);
   const [peerDestinationRouteDuration, setPeerDestinationRouteDuration] = useState(null);
   const [destinationRouteLoading, setDestinationRouteLoading] = useState(false);
-  const destinationRouteFetchRef = useRef(null);
+  const lastDestinationRouteFetchAtRef = useRef(0);
+  const destinationRouteFetchInFlightRef = useRef(false);
 
   // Peer display name (passed from accept flow or friend param, or fetched from session)
   const [peerName, setPeerName] = useState(friend?.display_name || friend?.name || 'Peer');
@@ -726,15 +750,15 @@ const ActiveSessionScreen = ({ route, navigation }) => {
     });
 
     unsubscribes.onError = realtimeService.on('error', (payload) => {
-      console.error('[ActiveSessionScreen] WS error:', payload);
       if (!isMountedRef.current) return;
 
-      // Suppress rate limit errors from alerting user - handled transparently by client-side throttling
-      if (payload.code === 'RATE_LIMIT_EXCEEDED') {
+      // Suppress rate limit errors from the visible demo UI; throttling/retry remains handled below the surface.
+      if (isRateLimitError(payload)) {
         DEBUG && console.log('[ActiveSessionScreen] Rate limit (suppressed for UX)');
         return;
       }
 
+      console.error('[ActiveSessionScreen] WS error:', payload);
       setWsError(`Error: ${payload.message}`);
     });
 
@@ -808,7 +832,7 @@ const ActiveSessionScreen = ({ route, navigation }) => {
           setSharingPausedText('');
         }
       }
-    }, 3000); // Every 3 seconds
+    }, 3400); // Backend limit is 3s; leave a small buffer to avoid demo-visible rate limit noise.
 
     return () => {
       if (locationIntervalRef.current) {
@@ -867,34 +891,44 @@ const ActiveSessionScreen = ({ route, navigation }) => {
 
     // Keep ref current so the timeout closure always reads latest mode
     selectedModeRef.current = selectedMode;
+    const directDistance = haversineDistance(myLocation, peerLocation);
+    setRouteDistance(directDistance);
+    setRouteDuration(estimateDurationForMode(directDistance, selectedMode));
 
-    if (routeFetchRef.current) clearTimeout(routeFetchRef.current);
-    routeFetchRef.current = setTimeout(async () => {
-      const mode = selectedModeRef.current; // read from ref, not closure
-      setRouteLoading(true);
-      const result = await getRoute(myLocation, peerLocation, mode);
-      if (result) {
-        setRouteCoords(result.coordinates);
-        setRouteDistance(result.distanceM);
-        setRouteDuration(result.durationSec);
-        injectMapData({
-          myLocation,
-          peerLocation,
-          routeCoords: result.coordinates,
-          peerName,
-          destination,
-          destinationRouteCoords,
-          peerDestinationRouteCoords,
-        });
-      } else {
-        setRouteCoords(null);
-        setRouteDistance(haversineDistance(myLocation, peerLocation));
-        setRouteDuration(null);
+    const now = Date.now();
+    if (routeFetchInFlightRef.current || now - lastRouteFetchAtRef.current < ROUTE_REFRESH_MS) return;
+
+    routeFetchInFlightRef.current = true;
+    lastRouteFetchAtRef.current = now;
+    const fetchRoute = async () => {
+      try {
+        const mode = selectedModeRef.current; // read from ref, not closure
+        setRouteLoading(true);
+        const result = await getRoute(myLocation, peerLocation, mode);
+        if (result) {
+          setRouteCoords(result.coordinates);
+          setRouteDistance(result.distanceM);
+          setRouteDuration(result.durationSec);
+          injectMapData({
+            myLocation,
+            peerLocation,
+            routeCoords: result.coordinates,
+            peerName,
+            destination,
+            destinationRouteCoords,
+            peerDestinationRouteCoords,
+          });
+        } else {
+          setRouteDistance(directDistance);
+          setRouteDuration(estimateDurationForMode(directDistance, mode));
+        }
+      } finally {
+        setRouteLoading(false);
+        routeFetchInFlightRef.current = false;
       }
-      setRouteLoading(false);
-    }, 2000); // 2s debounce
+    };
 
-    return () => clearTimeout(routeFetchRef.current);
+    fetchRoute();
   }, [myLocation, peerLocation, selectedMode, peerName, destination, destinationRouteCoords, peerDestinationRouteCoords, injectMapData]);
 
   /**
@@ -912,46 +946,64 @@ const ActiveSessionScreen = ({ route, navigation }) => {
     }
 
     selectedModeRef.current = selectedMode;
-    if (destinationRouteFetchRef.current) clearTimeout(destinationRouteFetchRef.current);
+    const destinationPoint = { lat: Number(destination.lat), lon: Number(destination.lon) };
+    const myDirectDistance = haversineDistance(myLocation, destinationPoint);
+    setDestinationRouteDistance(myDirectDistance);
+    setDestinationRouteDuration(estimateDurationForMode(myDirectDistance, selectedMode));
+    if (peerLocation) {
+      const peerDirectDistance = haversineDistance(peerLocation, destinationPoint);
+      setPeerDestinationRouteDistance(peerDirectDistance);
+      setPeerDestinationRouteDuration(estimateDurationForMode(peerDirectDistance, peerSelectedMode));
+    } else {
+      setPeerDestinationRouteCoords(null);
+      setPeerDestinationRouteDistance(null);
+      setPeerDestinationRouteDuration(null);
+    }
 
-    destinationRouteFetchRef.current = setTimeout(async () => {
-      const mode = selectedModeRef.current;
-      const destinationPoint = { lat: Number(destination.lat), lon: Number(destination.lon) };
-      setDestinationRouteLoading(true);
+    const now = Date.now();
+    if (destinationRouteFetchInFlightRef.current || now - lastDestinationRouteFetchAtRef.current < ROUTE_REFRESH_MS) return;
 
-      const [myRoute, friendRoute] = await Promise.all([
-        getRoute(myLocation, destinationPoint, mode),
-        peerLocation ? getRoute(peerLocation, destinationPoint, peerSelectedMode) : Promise.resolve(null),
-      ]);
+    destinationRouteFetchInFlightRef.current = true;
+    lastDestinationRouteFetchAtRef.current = now;
+    const fetchDestinationRoutes = async () => {
+      try {
+        const mode = selectedModeRef.current;
+        setDestinationRouteLoading(true);
 
-      if (myRoute) {
-        setDestinationRouteCoords(myRoute.coordinates);
-        setDestinationRouteDistance(myRoute.distanceM);
-        setDestinationRouteDuration(myRoute.durationSec);
-      } else {
-        setDestinationRouteCoords([[myLocation.lat, myLocation.lon], [destinationPoint.lat, destinationPoint.lon]]);
-        setDestinationRouteDistance(haversineDistance(myLocation, destinationPoint));
-        setDestinationRouteDuration(null);
+        const [myRoute, friendRoute] = await Promise.all([
+          getRoute(myLocation, destinationPoint, mode),
+          peerLocation ? getRoute(peerLocation, destinationPoint, peerSelectedMode) : Promise.resolve(null),
+        ]);
+
+        if (myRoute) {
+          setDestinationRouteCoords(myRoute.coordinates);
+          setDestinationRouteDistance(myRoute.distanceM);
+          setDestinationRouteDuration(myRoute.durationSec);
+        } else {
+          setDestinationRouteDistance(myDirectDistance);
+          setDestinationRouteDuration(estimateDurationForMode(myDirectDistance, mode));
+        }
+
+        if (friendRoute) {
+          setPeerDestinationRouteCoords(friendRoute.coordinates);
+          setPeerDestinationRouteDistance(friendRoute.distanceM);
+          setPeerDestinationRouteDuration(friendRoute.durationSec);
+        } else if (peerLocation) {
+          const peerDirectDistance = haversineDistance(peerLocation, destinationPoint);
+          setPeerDestinationRouteDistance(peerDirectDistance);
+          setPeerDestinationRouteDuration(estimateDurationForMode(peerDirectDistance, peerSelectedMode));
+        } else {
+          setPeerDestinationRouteCoords(null);
+          setPeerDestinationRouteDistance(null);
+          setPeerDestinationRouteDuration(null);
+        }
+      } finally {
+        setDestinationRouteLoading(false);
+        destinationRouteFetchInFlightRef.current = false;
       }
+    };
 
-      if (friendRoute) {
-        setPeerDestinationRouteCoords(friendRoute.coordinates);
-        setPeerDestinationRouteDistance(friendRoute.distanceM);
-        setPeerDestinationRouteDuration(friendRoute.durationSec);
-      } else if (peerLocation) {
-        setPeerDestinationRouteCoords([[peerLocation.lat, peerLocation.lon], [destinationPoint.lat, destinationPoint.lon]]);
-        setPeerDestinationRouteDistance(haversineDistance(peerLocation, destinationPoint));
-        setPeerDestinationRouteDuration(null);
-      } else {
-        setPeerDestinationRouteCoords(null);
-        setPeerDestinationRouteDistance(null);
-        setPeerDestinationRouteDuration(null);
-      }
-
-      setDestinationRouteLoading(false);
-    }, 1800);
-
-    return () => clearTimeout(destinationRouteFetchRef.current);
+    fetchDestinationRoutes();
   }, [destination, myLocation, peerLocation, selectedMode, peerSelectedMode]);
 
   const destinationDistanceText = destinationRouteDistance != null

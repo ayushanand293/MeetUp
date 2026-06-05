@@ -6,12 +6,26 @@
 
 const ORS_BASE = 'https://api.openrouteservice.org/v2';
 const ORS_KEY = process.env.EXPO_PUBLIC_ORS_KEY;
+const ROUTE_CACHE_TTL_MS = 30 * 1000;
+const COORD_PRECISION = 5;
+const routeCache = new Map();
+const pendingRouteRequests = new Map();
 
 export const TransportMode = {
     WALKING: { id: 'foot-walking', label: 'Walk', icon: '🚶' },
     CYCLING: { id: 'cycling-regular', label: 'Cycle', icon: '🚴' },
     DRIVING: { id: 'driving-car', label: 'Drive', icon: '🚗' },
 };
+
+const roundCoord = value => Number(value).toFixed(COORD_PRECISION);
+
+const routeCacheKey = (from, to, profile) => [
+    profile,
+    roundCoord(from.lat),
+    roundCoord(from.lon),
+    roundCoord(to.lat),
+    roundCoord(to.lon),
+].join(':');
 
 /**
  * Fetch a route between two coordinates.
@@ -25,6 +39,32 @@ export async function getRoute(from, to, profile = 'foot-walking') {
         console.warn('[ORS] EXPO_PUBLIC_ORS_KEY not set');
         return null;
     }
+
+    const cacheKey = routeCacheKey(from, to, profile);
+    const cached = routeCache.get(cacheKey);
+    if (cached && Date.now() - cached.createdAt < ROUTE_CACHE_TTL_MS) {
+        return cached.result;
+    }
+
+    const pending = pendingRouteRequests.get(cacheKey);
+    if (pending) return pending;
+
+    const request = fetchRoute(from, to, profile)
+        .then((result) => {
+            if (result) {
+                routeCache.set(cacheKey, { result, createdAt: Date.now() });
+            }
+            return result;
+        })
+        .finally(() => {
+            pendingRouteRequests.delete(cacheKey);
+        });
+
+    pendingRouteRequests.set(cacheKey, request);
+    return request;
+}
+
+async function fetchRoute(from, to, profile) {
     try {
         const body = {
             coordinates: [

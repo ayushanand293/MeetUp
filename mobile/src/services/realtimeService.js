@@ -193,7 +193,7 @@ class RealtimeService extends EventEmitter {
   }
 
   /**
-   * Send location update with client-side throttling (1 per 3 seconds)
+   * Send location update with client-side throttling.
    * @param {number} lat - Latitude
    * @param {number} lon - Longitude
    * @param {number} accuracy_m - Accuracy in meters
@@ -202,7 +202,7 @@ class RealtimeService extends EventEmitter {
   sendLocationUpdate(lat, lon, accuracy_m = 10) {
     const now = Date.now();
     const timeSinceLastSent = now - this.lastLocationSentTime;
-    const THROTTLE_MS = 3000; // 3 seconds (align with server limit)
+    const THROTTLE_MS = 3200; // Server limit is 3s; keep a small buffer for timer/network drift.
 
     // Enforce client-side throttle to prevent rate limit errors
     if (timeSinceLastSent < THROTTLE_MS) {
@@ -411,7 +411,11 @@ class RealtimeService extends EventEmitter {
           break;
 
         case 'error':
-          console.error('[RealtimeService] Server error:', data.payload);
+          if (data.payload?.code !== 'RATE_LIMIT_EXCEEDED') {
+            console.error('[RealtimeService] Server error:', data.payload);
+          } else {
+            DEBUG && console.log('[RealtimeService] Rate limit event suppressed');
+          }
           this.emit('error', data.payload);
           break;
 
